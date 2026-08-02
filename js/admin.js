@@ -1,6 +1,7 @@
 import { requireAdmin, signOut } from './auth.js';
 import { toast } from './components.js';
 import { configured, supabase } from './supabase-client.js';
+import { mountRevenueTools } from './revenue-admin.js';
 
 const $=(selector,parent=document)=>parent.querySelector(selector);
 const esc=(value='')=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -211,4 +212,5 @@ document.addEventListener('DOMContentLoaded',async()=>{
   const role=$('[data-role]');if(role){role.textContent=access.role?.replace('_',' ')||'demo mode';role.className=`status ${access.demo?'status-scheduled':'status-published'}`;}
   if(access.demo){$('#admin-view').innerHTML='<section class="panel"><h3>Connect Supabase to use the CMS</h3><p class="text-muted">Set the public project URL and publishable key in js/config.js, then sign in with a newsroom role.</p></section>';return;}
   await renderView(page);
+  await mountRevenueTools(page);
 });

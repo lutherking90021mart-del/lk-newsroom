@@ -111,6 +111,14 @@ Choose one scheduler. Do not enable several intentionally; the database lock is 
 
 Open the dashboard after signing in. Its cards and tables are read from Supabase, not demo data. Use **Articles** to create, edit, publish, schedule, tag, upload an image, or delete your own stories. Use **Ads** to save a campaign with an image URL or uploaded image; active campaigns display in the matching public sidebar and record impressions/clicks after the CMS upgrade SQL is run. News Sources provides enable/disable and manual sync controls; Logs provides source-level run/error information.
 
+## Revenue, analytics and SEO upgrade
+
+Run `supabase/monetization-upgrade.sql` once in the Supabase SQL Editor. It adds advertiser records, Direct / Sponsored / AdSense campaign formats, campaign status and scheduling, CTR fields, and privacy-friendly page-view dimensions without deleting existing ads or page views.
+
+After it is applied, open **Admin → Ads** to create campaigns for header, hero, sidebar, inline-article, footer, sticky, popup, sponsored-news, and video placements. The original simple ad form remains available for existing campaigns. Add your Google AdSense publisher ID in **Admin → Settings** and use an approved AdSense slot ID in an AdSense campaign. Do not enter secret API keys in the public Settings screen.
+
+The public site records first-party page events for the live Analytics screen using a random browser ID stored locally; it does not collect IP addresses. Country is based only on a browser regional setting when the browser provides one. Article pages now include canonical URLs, Open Graph and Twitter card metadata, JSON-LD `NewsArticle` data, plus `/sitemap.xml` and `/robots.txt`.
+
 ## Football coverage
 
 The Sports section includes the official BBC Sport Football RSS feed and a separate **News API Football** source. Put your real `NEWS_API_KEY` in `.env`, restart the server, then open **Admin → News Sources**, enable **News API Football**, and press **Sync**. The query can be adjusted with `NEWS_API_SPORTS_QUERY` in `.env`.

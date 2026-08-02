@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express,{type NextFunction,type Request,type Response} from 'express';
 import cors from 'cors';
 import cron from 'node-cron';
+import {readFile} from 'node:fs/promises';
 import {createClient} from '@supabase/supabase-js';
 import {NewsWorker} from '../worker/newsWorker.js';
 import {findImageCandidates} from '../services/googleImageSearch.js';
@@ -12,6 +13,7 @@ if(!url||!serviceKey)throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
 const db=createClient(url,serviceKey,{auth:{persistSession:false}});
 const worker=new NewsWorker(db);
 const app=express();
+app.set('trust proxy',1);
 const publicArticleFields='id,slug,title,excerpt,ai_summary,featured_image_url,original_url,published_at,created_at,country,auto_tags,view_count,categories(name,slug),news_sources(name,slug),authors(name)';
 const detailArticleFields='*,categories(name,slug),news_sources(name,slug),authors(name),article_tags(tags(name,slug))';
 const isUuid=(value:string)=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -52,6 +54,19 @@ async function articleByIdentifier(identifier:string){
   return data;
 }
 function nextFiveMinutes(){return new Date((Math.floor(Date.now()/300_000)+1)*300_000).toISOString();}
+const escHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!));
+const escXml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
+function publicOrigin(req:Request){return (process.env.PUBLIC_ORIGIN?.split(',')[0]||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');}
+function plainText(value:unknown){return String(value??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();}
+async function articleDocument(req:Request,article:Record<string,any>){
+  const origin=publicOrigin(req);const canonical=`${origin}/news/${encodeURIComponent(article.slug||article.id)}`;
+  const title=article.meta_title||article.title||'LK Newsroom';const description=(article.meta_description||article.ai_summary||article.excerpt||plainText(article.content)||'LK Newsroom reporting.').slice(0,300);
+  const image=article.featured_image_url||`${origin}/assets/default-news.svg`;const category=article.categories?.name||'News';const source=article.news_sources?.name||'LK Newsroom';
+  const structured={ '@context':'https://schema.org','@type':'NewsArticle',headline:title,description,datePublished:article.published_at,dateModified:article.updated_at||article.published_at,mainEntityOfPage:canonical,image:[image],articleSection:category,author:{'@type':'Organization',name:article.authors?.name||source},publisher:{'@type':'Organization',name:'LK Newsroom',logo:{'@type':'ImageObject',url:`${origin}/assets/lk-newsroom-logo.png`}} };
+  const seo=`<link rel="canonical" href="${escHtml(canonical)}"><meta property="og:type" content="article"><meta property="og:title" content="${escHtml(title)}"><meta property="og:description" content="${escHtml(description)}"><meta property="og:image" content="${escHtml(image)}"><meta property="og:url" content="${escHtml(canonical)}"><meta property="article:section" content="${escHtml(category)}"><meta property="article:published_time" content="${escHtml(article.published_at||'')}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escHtml(title)}"><meta name="twitter:description" content="${escHtml(description)}"><meta name="twitter:image" content="${escHtml(image)}"><script type="application/ld+json">${JSON.stringify(structured).replace(/</g,'\\u003c')}</script>`;
+  const template=await readFile(`${process.cwd()}/pages/article.html`,'utf8');
+  return template.replace(/<title>[^<]*<\/title>/i,`<title>${escHtml(title)} | LK Newsroom</title>`).replace(/<meta name="description"[^>]*>/i,`<meta name="description" content="${escHtml(description)}">`).replace('</head>',`${seo}</head>`);
+}
 
 app.get('/health',async(_req,res)=>{
   const {data}=await db.from('worker_runs').select('status,completed_at,started_at').order('started_at',{ascending:false}).limit(1).maybeSingle();
@@ -177,8 +192,22 @@ app.post('/v1/admin/image-search',requireStaff,async(req,res)=>{
 });
 app.all('/api/news/update',requireCronOrStaff,async(req,res)=>runManualWorker(req,res,'cron'));
 
-// A human-readable canonical route for every article. The browser then requests only that article's data.
-app.get('/news/:identifier',(_req,res)=>res.sendFile(`${process.cwd()}/pages/article.html`));
+app.get('/robots.txt',(req,res)=>res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /admin/\nSitemap: ${publicOrigin(req)}/sitemap.xml\n`));
+app.get('/sitemap.xml',async(req,res)=>{
+  try{
+    const origin=publicOrigin(req);const {data,error}=await db.from('articles').select('slug,id,updated_at,published_at').eq('status','published').is('duplicate_of',null).order('published_at',{ascending:false}).limit(5000);
+    if(error)throw error;
+    const staticPaths=['/','/category/ghana','/category/politics','/category/business','/category/technology','/category/entertainment','/category/sports','/category/health','/category/education','/category/africa','/category/world','/category/opinion','/pages/about.html','/pages/contact.html','/pages/privacy.html','/pages/terms.html'];
+    const urls=[...staticPaths.map(path=>`<url><loc>${escXml(`${origin}${path}`)}</loc></url>`),...(data||[]).map(article=>`<url><loc>${escXml(`${origin}/news/${encodeURIComponent(article.slug||article.id)}`)}</loc><lastmod>${new Date(article.updated_at||article.published_at).toISOString()}</lastmod></url>`)].join('');
+    res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`);
+  }catch(error){res.status(500).type('text/plain').send(error instanceof Error?error.message:'Unable to build sitemap');}
+});
+
+// A canonical article route with crawlable metadata. The browser still loads the live article data from Supabase.
+app.get('/news/:identifier',async(req,res)=>{
+  try{const article=await articleByIdentifier(req.params.identifier);if(!article)return res.status(404).sendFile(`${process.cwd()}/404.html`);res.type('html').send(await articleDocument(req,article));}
+  catch{res.status(500).sendFile(`${process.cwd()}/pages/article.html`);}
+});
 // Each desk has its own stable URL, while a single reusable page loads the selected category.
 app.get('/category/:slug',(_req,res)=>res.sendFile(`${process.cwd()}/pages/category.html`));
 const port=Number(process.env.PORT||5173);
