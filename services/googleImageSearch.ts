@@ -6,6 +6,12 @@ export interface ImageSearchCandidate {
   pageUrl:string;
 }
 
+function publisherDomain(originalUrl?:string){try{return originalUrl?new URL(originalUrl).hostname.replace(/^www\./,''):'';}catch{return '';}}
+function isPublisherCandidate(candidate:ImageSearchCandidate,domain:string){
+  if(!domain)return false;
+  try{const host=new URL(candidate.pageUrl).hostname.replace(/^www\./,'');return host===domain||host.endsWith(`.${domain}`);}catch{return false;}
+}
+
 /**
  * Searches Google through the official Programmable Search JSON API.
  * This is intentionally server-only: the API key never reaches the browser.
@@ -15,8 +21,7 @@ export async function findImageCandidates(title:string,originalUrl?:string,limit
   const engineId=process.env.GOOGLE_CUSTOM_SEARCH_ENGINE_ID?.trim();
   if(!key||!engineId)throw new Error('Google image search is not configured. Add GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_ENGINE_ID to the server variables.');
 
-  let domain='';
-  try{domain=originalUrl?new URL(originalUrl).hostname.replace(/^www\./,''):'';}catch{}
+  const domain=publisherDomain(originalUrl);
   // Prefer the original publisher so an editor can choose the most relevant, attributable image.
   const query=`${domain?`site:${domain} `:''}${title}`.slice(0,220);
   const params=new URLSearchParams({key,cx:engineId,q:query,searchType:'image',safe:'active',num:String(Math.max(1,Math.min(limit,10)))});
@@ -26,4 +31,11 @@ export async function findImageCandidates(title:string,originalUrl?:string,limit
   return (payload.items||[]).map((item:any)=>({
     imageUrl:String(item.link||''),thumbnailUrl:String(item.image?.thumbnailLink||item.link||''),title:String(item.title||'Image result'),sourceName:String(item.displayLink||domain||'Google result'),pageUrl:String(item.image?.contextLink||item.link||'')
   })).filter((item:ImageSearchCandidate)=>/^https:\/\//i.test(item.imageUrl));
+}
+
+/** Returns only an image result whose context page belongs to the original publisher. */
+export async function findPublisherImage(title:string,originalUrl?:string){
+  const domain=publisherDomain(originalUrl);if(!domain)return null;
+  const candidates=await findImageCandidates(title,originalUrl,5);
+  return candidates.find(candidate=>isPublisherCandidate(candidate,domain))||null;
 }

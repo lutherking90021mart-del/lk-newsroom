@@ -76,6 +76,8 @@ GOOGLE_CUSTOM_SEARCH_ENGINE_ID=
 
 For an editor-approved image lookup, create a Google Programmable Search Engine that permits image search, enable the Custom Search JSON API, and add `GOOGLE_CUSTOM_SEARCH_API_KEY` plus `GOOGLE_CUSTOM_SEARCH_ENGINE_ID` to the web service only. In **Admin → Articles**, stories without a featured image then show a picture button. It searches the article title—preferring the original publisher’s domain—and shows choices. An editor must choose an image before it is saved. Do not select images unless your publication has permission to use them.
 
+For optional automatic completion, first run `supabase/image-backfill-upgrade.sql` in Supabase. Then set `AUTO_FILL_MISSING_IMAGES=true` and `AUTO_IMAGE_BACKFILL_LIMIT=6` in the **worker** service, alongside the two Google Custom Search values. Each worker run checks a small batch of image-less stories and uses only candidates whose context page is on the story's original publisher domain. It does not scrape article pages, download unrelated Google images, or replace a valid publisher-provided image.
+
 `POST` or `GET /api/news/update` triggers a run. In production it accepts either `Authorization: Bearer <CRON_SECRET>` or an authenticated newsroom staff token.
 
 ## Deploy for 24/7 updates

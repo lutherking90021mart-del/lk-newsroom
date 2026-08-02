@@ -9,6 +9,7 @@ import { findDuplicate } from '../worker/duplicateChecker.js';
 import { classifyCategory } from '../worker/categoryClassifier.js';
 import { cacheFeedImage } from '../worker/imageDownloader.js';
 import { notifyAdminOfSourceFailure } from './notifier.js';
+import { backfillMissingImages } from './imageBackfill.js';
 
 type SyncResult={source:string;fetched:number;inserted:number;updated:number;duplicates:number;status:'success'|'error';error?:string};
 const slugify=(value:string)=>value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'').slice(0,120);
@@ -33,7 +34,9 @@ export class NewsAggregator {
     const choices=sourceSlug?this.sourceProviders.filter(provider=>provider.source.slug===sourceSlug):this.sourceProviders;
     const results:SyncResult[]=[];
     for(const provider of choices){ const row=sourceRows.get(provider.source.slug); if(!row?.enabled){continue;} results.push(await this.syncProvider(provider,row.id)); }
-    await this.rebuildTrending(); await this.rebuildFeatured(); return results;
+    await this.rebuildTrending(); await this.rebuildFeatured();
+    try{const images=await backfillMissingImages(this.db);if(images.checked)console.info(`Image backfill: ${images.updated} updated, ${images.skipped} skipped, ${images.errors} errors.`);}catch(error){console.warn('Automatic image backfill skipped:',error instanceof Error?error.message:error);}
+    return results;
   }
   private async fetchWithRetry(provider:NewsProvider){
     const cached=this.cache.get(provider.source.slug); if(cached)return cached;
