@@ -86,6 +86,13 @@ app.get('/v1/news',async(req,res)=>{
   res.json({data,total:count||0,offset,limit,updatedAt:new Date().toISOString()});
 });
 
+app.get('/v1/videos',async(req,res)=>{
+  const limit=Math.min(Math.max(Number(req.query.limit)||12,1),48);
+  const {data,error}=await db.from('videos').select('id,title,description,video_url,youtube_url,thumbnail_url,duration_seconds,published_at,created_at,articles(news_sources(name,slug))').eq('status','published').order('published_at',{ascending:false}).limit(limit);
+  if(error)return res.status(500).json({error:error.message});
+  res.json({data:data||[],updatedAt:new Date().toISOString()});
+});
+
 app.get('/v1/news/:identifier',async(req,res)=>{
   try{
     const article=await articleByIdentifier(req.params.identifier);

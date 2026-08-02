@@ -46,3 +46,5 @@ export function rssProvider(source:SourceDefinition):NewsProvider {
   }};
 }
 export function configuredRss(slug:string,name:string,envKey:string,country:string,category:NewsCategory):NewsProvider { const feedUrl=process.env[envKey]; return rssProvider({slug,name,feedUrl,country,category,sourceType:'rss',enabled:Boolean(feedUrl)}); }
+/** A publisher's documented public RSS feed. An environment variable can replace it if the publisher changes the endpoint. */
+export function publisherRss(slug:string,name:string,envKey:string,defaultFeedUrl:string,country:string,category:NewsCategory):NewsProvider { const feedUrl=process.env[envKey]?.trim()||defaultFeedUrl; return rssProvider({slug,name,feedUrl,country,category,sourceType:'rss',enabled:true}); }

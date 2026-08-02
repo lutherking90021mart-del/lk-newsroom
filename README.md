@@ -117,6 +117,14 @@ The Sports section includes the official BBC Sport Football RSS feed and a separ
 
 To include posts from **Fabrizio Romano (X)**, use an authorised X API bearer token in `X_BEARER_TOKEN`. Leave `FABRIZIO_X_HANDLE=FabrizioRomano` unless the official handle changes. The source appears in **Admin → News Sources** after deployment; enable it and sync. Each item links to the original post and should be treated as an attributed update, not independently verified reporting.
 
+## Ghana, Africa, and publisher video coverage
+
+LK Newsroom includes publisher-provided default feeds for **JoyNews**, **Citi Newsroom**, **GhanaWeb**, **3News / TV3 Ghana**, **Adom Online**, **Africanews**, and **News24**. After the worker has deployed, open **Admin → News Sources**, enable the sources you are licensed to use, then select **Sync**. Other catalogue entries remain disabled until you add a permitted RSS/API endpoint in `.env`.
+
+The **Latest Videos** section is data-driven. It stores video entries from official publisher YouTube Atom feeds for **BBC News**, **Reuters**, **Al Jazeera**, and **Sky News**. Enable the matching `… Video` sources in **Admin → News Sources** and sync them; published videos will then appear on the homepage and the Video News page with their original publisher link.
+
+The public weather card reads live conditions from Open-Meteo for Accra by default. Rain and showers show a falling-rain animation, thunderstorms add lightning, and visitors can choose **Use my location** for a local reading.
+
 ## Source rights
 
 Only configure publisher-provided RSS endpoints, official APIs, or licensed syndication endpoints. Feeds/APIs that require a contract (for example Reuters, AP, Bloomberg, and some local publishers) remain disabled until their permitted endpoint is added to `.env`.
