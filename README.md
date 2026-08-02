@@ -115,6 +115,8 @@ Open the dashboard after signing in. Its cards and tables are read from Supabase
 
 The Sports section includes the official BBC Sport Football RSS feed and a separate **News API Football** source. Put your real `NEWS_API_KEY` in `.env`, restart the server, then open **Admin → News Sources**, enable **News API Football**, and press **Sync**. The query can be adjusted with `NEWS_API_SPORTS_QUERY` in `.env`.
 
+To include posts from **Fabrizio Romano (X)**, use an authorised X API bearer token in `X_BEARER_TOKEN`. Leave `FABRIZIO_X_HANDLE=FabrizioRomano` unless the official handle changes. The source appears in **Admin → News Sources** after deployment; enable it and sync. Each item links to the original post and should be treated as an attributed update, not independently verified reporting.
+
 ## Source rights
 
 Only configure publisher-provided RSS endpoints, official APIs, or licensed syndication endpoints. Feeds/APIs that require a contract (for example Reuters, AP, Bloomberg, and some local publishers) remain disabled until their permitted endpoint is added to `.env`.
