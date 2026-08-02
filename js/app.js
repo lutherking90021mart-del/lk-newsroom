@@ -7,6 +7,8 @@ const query=new URLSearchParams(location.search);
 const aggregatorApi=()=>String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'');
 const fallbackImage=()=>link('assets/default-news.svg');
 let feed=[];
+const categorySlug=value=>String(value||'').trim().toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+const categoryStories=(items,category)=>category==='Latest'?items:items.filter(article=>article.category.toLowerCase()===category.toLowerCase()||article.categorySlug===categorySlug(category));
 const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Updated just now';if(minutes<60)return `Updated ${minutes} minute${minutes===1?'':'s'} ago`;const hours=Math.floor(minutes/60);if(hours<24)return `Updated ${hours} hour${hours===1?'':'s'} ago`;const days=Math.floor(hours/24);return days===1?'Updated yesterday':`Updated ${days} days ago`;};
 const uiDate=date=>new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date));
 const toUiArticle=row=>({
@@ -50,7 +52,7 @@ function home(){
   $('#latest-news').innerHTML=feed.slice(4,10).map(article=>articleCard(article)).join('');
   $('#trending-news').innerHTML=[...feed].sort((a,b)=>b.views-a.views).slice(0,3).map(article=>articleCard(article,true)).join('');
   const mostRead=$('#most-read')||$('.ranked-list');if(mostRead)mostRead.innerHTML=[...feed].sort((a,b)=>b.views-a.views).slice(0,4).map(article=>`<li><a href="/news/${encodeURIComponent(article.id)}">${esc(article.title)}</a></li>`).join('');
-  $('#category-tiles').innerHTML=categories.map(([name,icon])=>`<a data-aos="zoom-in" class="category-tile" href="${link(`pages/category.html?category=${name}`)}"><i class="fa-solid ${icon}"></i><strong>${name}</strong><small>Latest coverage</small></a>`).join('');
+  $('#category-tiles').innerHTML=categories.map(([name,icon])=>{const stories=categoryStories(feed,name);const latest=stories[0];const label=stories.length?`${stories.length} live ${stories.length===1?'story':'stories'}`:'Live desk';const detail=latest?.title||'Fresh verified reporting is on the way.';return `<a data-aos="zoom-in" class="category-tile" href="${link(`pages/category.html?category=${encodeURIComponent(name)}`)}"><i class="fa-solid ${icon}"></i><strong>${name}</strong><small>${label}</small><span class="category-tile__headline" title="${esc(detail)}">${esc(detail)}</span></a>`;}).join('');
   $('#videos').innerHTML=videos.map(video=>`<article><div class="video-card"><img src="${video.image}" alt="" loading="lazy"><a class="play-button" href="${link('pages/video-news.html')}" aria-label="Play ${esc(video.title)}"><i class="fa-solid fa-play"></i></a></div><h3 class="headline">${esc(video.title)}</h3></article>`).join('');
   $('#gallery').innerHTML=gallery.map(item=>`<a class="gallery-item" href="${link('pages/gallery.html')}"><img src="${item.image}" alt="${esc(item.title)}" loading="lazy"><span>${esc(item.title)}</span></a>`).join('');
   renderNewsletter($('#newsletter'));
@@ -58,12 +60,39 @@ function home(){
   if(window.Swiper)new Swiper('.hero-swiper',{loop:feed.length>1,speed:750,autoplay:{delay:5000,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true}});
   if(window.gsap)gsap.from('.featured-strip article',{y:26,opacity:0,stagger:.12,duration:.55,delay:.25});
 }
-function categoryPage(){
+async function categoryPage(){
   const category=query.get('category')||document.body.dataset.category||'Latest';
-  const filtered=category==='Latest'?feed:feed.filter(article=>article.category.toLowerCase()===category.toLowerCase()||article.categorySlug===category.toLowerCase());
+  const grid=$('#category-news');
+  const pageSize=24;
+  let filtered=categoryStories(feed,category);
+  let total=filtered.length;
+  let offset=0;
+  let usingApi=false;
   $('#category-title').textContent=category==='Latest'?'Latest News':category;
-  $('#category-description').textContent=category==='Latest'?'The latest verified reporting from LK Newsroom.':`The latest ${category.toLowerCase()} stories, analysis and explainers.`;
-  $('#category-news').innerHTML=(filtered.length?filtered:[]).map(article=>articleCard(article)).join('')||'<div class="empty-state"><i class="fa-solid fa-newspaper fa-2x"></i><p>No published stories in this section yet.</p></div>';
+  $('#category-description').textContent=category==='Latest'?'All the latest verified reporting, analysis and explainers from LK Newsroom.':`In-depth ${category.toLowerCase()} reporting, analysis and explainers from trusted publishers.`;
+  grid.innerHTML='<div class="spinner"></div>';
+  try{
+    const params=new URLSearchParams({limit:String(pageSize),offset:'0'});
+    if(category!=='Latest')params.set('category',categorySlug(category));
+    const response=await fetch(`${aggregatorApi()}/v1/news?${params}`);
+    if(response.ok){const payload=await response.json();if(Array.isArray(payload.data)){filtered=payload.data.map(toUiArticle);total=Number(payload.total??filtered.length);usingApi=true;offset=filtered.length;}}
+  }catch{}
+  const renderStories=stories=>stories.map(article=>articleCard(article)).join('');
+  grid.innerHTML=filtered.length?renderStories(filtered):'<div class="empty-state"><i class="fa-solid fa-newspaper fa-2x"></i><p>No published stories in this section yet. Enable more authorised sources in Admin to grow this live desk.</p></div>';
+  const oldPager=document.querySelector('[data-category-pager]');if(oldPager)oldPager.remove();
+  const summary=document.createElement('div');summary.className='category-results-summary';summary.dataset.categoryPager='';
+  const visible=filtered.length;summary.innerHTML=`<span><strong>${total.toLocaleString()}</strong> ${total===1?'story':'stories'} available in ${esc(category==='Latest'?'the newsroom':category)}.</span>${usingApi&&visible<total?'<button class="btn btn-outline" type="button" data-category-more>Load more stories <i class="fa-solid fa-arrow-down"></i></button>':''}`;
+  grid.after(summary);
+  const more=$('[data-category-more]',summary);
+  more?.addEventListener('click',async()=>{
+    more.disabled=true;more.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Loading stories';
+    try{
+      const params=new URLSearchParams({limit:String(pageSize),offset:String(offset)});if(category!=='Latest')params.set('category',categorySlug(category));
+      const response=await fetch(`${aggregatorApi()}/v1/news?${params}`);if(!response.ok)throw new Error('Unable to load more stories.');
+      const payload=await response.json();const moreStories=Array.isArray(payload.data)?payload.data.map(toUiArticle):[];offset+=moreStories.length;grid.insertAdjacentHTML('beforeend',renderStories(moreStories));
+      total=Number(payload.total??total);if(!moreStories.length||offset>=total)more.remove();else{more.disabled=false;more.innerHTML='Load more stories <i class="fa-solid fa-arrow-down"></i>';}if(window.AOS)AOS.refresh();
+    }catch(error){more.disabled=false;more.innerHTML='Try loading more <i class="fa-solid fa-rotate-right"></i>';toast(error.message||'Unable to load more stories.');}
+  });
   renderNewsletter($('#newsletter'));
 }
 const paragraphs=value=>String(value||'').split(/\n{2,}/).filter(Boolean).map(part=>`<p>${esc(part)}</p>`).join('');
@@ -98,4 +127,4 @@ function searchPage(){const list=$('#search-results');const run=()=>{const term=
 function livePage(){const updates=[['14:10','Transport ministry says the project timeline remains on track.'],['13:42','Community leaders welcome the announcement and call for open dialogue.'],['13:08','Our correspondent is speaking with officials at the briefing.'],['12:30','The afternoon briefing has begun; follow verified updates below.']];$('#live-updates').innerHTML=updates.map(([time,text],index)=>`<article class="comment"><span class="badge">${index===0?'New':'Update'}</span><strong style="margin-left:8px">${time}</strong><p>${text}</p></article>`).join('');let seconds=31;setInterval(()=>{seconds=seconds===1?31:seconds-1;const element=$('#refresh-countdown');if(element)element.textContent=seconds;},1000);if(configured)subscribeRealtime('breaking_news',()=>toast('A new breaking update is available.'));}
 function mediaPage(type){const title=type==='video'?'Video News':'Photo Gallery';$('#media-title').textContent=title;$('#media-description').textContent=type==='video'?'Watch original reporting, interviews and explainers from LK Newsroom.':'The week’s stories, through the lens of our photojournalists.';const element=$('#media-content');element.innerHTML=type==='video'?videos.concat(videos).map(video=>`<article><div class="video-card"><img src="${video.image}" alt=""><a href="#" class="play-button"><i class="fa-solid fa-play"></i></a></div><h3>${video.title}</h3><span class="meta">LK Newsroom · 4:20</span></article>`).join(''):gallery.concat(gallery).map(item=>`<a class="gallery-item" href="#"><img src="${item.image}" alt="${item.title}"><span>${item.title}</span></a>`).join('');}
 function staticPage(){const page=document.body.dataset.static;const pages={about:['About LK Newsroom','Independent journalism that helps people understand their world.','We are a modern newsroom built on accuracy, humanity and public service. Our team brings clear reporting and useful context to the stories that shape our communities.'],contact:['Contact us','We would like to hear from you.','For news tips, corrections, partnerships or general enquiries, email <strong>hello@lknewsroom.example</strong>. Our editorial desk reviews credible public-interest leads every day.'],privacy:['Privacy Policy','Your privacy matters to us.','We only collect information needed to deliver our service, such as newsletter sign-ups and account preferences. We do not sell your personal information.'],terms:['Terms of Use','A simple agreement for using LK Newsroom.','Content is provided for personal, non-commercial use. Please credit LK Newsroom when sharing excerpts and do not reproduce material without written permission.'],advertise:['Advertise with LK Newsroom','Reach an informed, engaged audience.','Our commercial team can create effective sponsorships, display campaigns and branded content opportunities with clear editorial safeguards.']};const content=pages[page]||pages.about;$('#static-title').textContent=content[0];$('#static-subtitle').textContent=content[1];$('#static-content').innerHTML=`<div class="article-body"><p>${content[2]}</p><h2>Our commitment</h2><p>We believe good journalism should be accessible, trustworthy and responsive to the people it serves. Contact our team for more information.</p></div>`;}
-document.addEventListener('DOMContentLoaded',async()=>{setTheme();initShell();await Promise.all([hydrateNews(),refreshBreaking(),loadAdvertisements()]);connectLiveUpdates();const type=document.body.dataset.template;if(type==='home')home();if(type==='category')categoryPage();if(type==='article')await articlePage();if(type==='search')searchPage();if(type==='live')livePage();if(type==='media')mediaPage(document.body.dataset.media);if(type==='static')staticPage();});
+document.addEventListener('DOMContentLoaded',async()=>{setTheme();initShell();await Promise.all([hydrateNews(),refreshBreaking(),loadAdvertisements()]);connectLiveUpdates();const type=document.body.dataset.template;if(type==='home')home();if(type==='category')await categoryPage();if(type==='article')await articlePage();if(type==='search')searchPage();if(type==='live')livePage();if(type==='media')mediaPage(document.body.dataset.media);if(type==='static')staticPage();});

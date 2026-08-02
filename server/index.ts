@@ -59,7 +59,10 @@ app.get('/health',async(_req,res)=>{
 });
 
 app.get('/v1/news',async(req,res)=>{
-  let query=db.from('articles').select(publicArticleFields).eq('status','published').eq('is_aggregated',true).is('duplicate_of',null).order('published_at',{ascending:false}).limit(Math.min(Number(req.query.limit)||30,100));
+  // Offset pagination keeps every section useful as the newsroom grows beyond its first stories.
+  const limit=Math.min(Math.max(Number(req.query.limit)||30,1),48);
+  const offset=Math.min(Math.max(Number(req.query.offset)||0,0),4_800);
+  let query=db.from('articles').select(publicArticleFields,{count:'exact'}).eq('status','published').eq('is_aggregated',true).is('duplicate_of',null).order('published_at',{ascending:false});
   if(typeof req.query.category==='string')query=query.eq('categories.slug',req.query.category);
   if(typeof req.query.country==='string')query=query.eq('country',req.query.country);
   if(typeof req.query.author==='string')query=query.ilike('authors.name',`%${req.query.author.slice(0,80)}%`);
@@ -70,9 +73,9 @@ app.get('/v1/news',async(req,res)=>{
     const {data:source}=await db.from('news_sources').select('id').eq('slug',req.query.source).maybeSingle();
     if(source)query=query.eq('source_id',source.id);
   }
-  const {data,error}=await query;
+  const {data,error,count}=await query.range(offset,offset+limit-1);
   if(error)return res.status(500).json({error:error.message});
-  res.json({data,updatedAt:new Date().toISOString()});
+  res.json({data,total:count||0,offset,limit,updatedAt:new Date().toISOString()});
 });
 
 app.get('/v1/news/:identifier',async(req,res)=>{
