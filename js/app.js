@@ -66,22 +66,30 @@ function initShell(){
   document.addEventListener('submit',event=>{if(!event.target.matches('[data-contact-form]'))return;event.preventDefault();event.target.reset();toast('Thanks — your message has been sent to LK Newsroom.');});
   if(window.AOS)AOS.init({once:true,offset:35,duration:520});
 }
-function renderHero(){
-  const wrapper=$('.hero-swiper .swiper-wrapper');if(!wrapper||!feed.length)return;
-  wrapper.innerHTML=feed.slice(0,3).map(article=>`<article class="swiper-slide hero-slide" style="background-image:url('${esc(article.image)}')"><div class="hero-content"><span class="badge">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p>${esc(article.excerpt)}</p><a class="btn btn-primary" href="/news/${encodeURIComponent(article.id)}">Read the full story <i class="fa-solid fa-arrow-right"></i></a></div></article>`).join('');
+function renderHero(stories=feed.slice(0,3)){
+  const wrapper=$('.hero-swiper .swiper-wrapper');if(!wrapper||!stories.length)return;
+  wrapper.innerHTML=stories.map(article=>`<article class="swiper-slide hero-slide" style="background-image:url('${esc(article.image)}')"><div class="hero-content"><span class="badge">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p>${esc(article.excerpt)}</p><a class="btn btn-primary" href="/news/${encodeURIComponent(article.id)}">Read the full story <i class="fa-solid fa-arrow-right"></i></a></div></article>`).join('');
 }
+function takeUnused(stories,count,used){const selected=[];for(const story of stories){const key=String(story.id||story.slug||story.title);if(used.has(key))continue;used.add(key);selected.push(story);if(selected.length===count)break;}return selected;}
 function home(){
-  renderHero();
-  $('#featured-articles').innerHTML=feed.slice(0,3).map(article=>articleCard(article)).join('');
-  $('#top-stories').innerHTML=feed.slice(1,5).map((article,index)=>articleCard(article,index>0)).join('');
-  $('#latest-news').innerHTML=feed.slice(4,10).map(article=>articleCard(article)).join('');
-  $('#trending-news').innerHTML=[...feed].sort((a,b)=>b.views-a.views).slice(0,3).map(article=>articleCard(article,true)).join('');
-  const mostRead=$('#most-read')||$('.ranked-list');if(mostRead)mostRead.innerHTML=[...feed].sort((a,b)=>b.views-a.views).slice(0,4).map(article=>`<li><a href="/news/${encodeURIComponent(article.id)}">${esc(article.title)}</a></li>`).join('');
+  const used=new Set();
+  const heroStories=takeUnused(feed,3,used);renderHero(heroStories);
+  const featuredStories=takeUnused(feed,3,used);
+  const editorStories=takeUnused([...feed].filter(article=>article.category==='Opinion'||article.category==='Politics'||article.category==='Business').concat(feed),4,used);
+  const latestStories=takeUnused(feed,6,used);
+  const trendingStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),3,used);
+  const mostReadStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),4,used);
+  const remainingStories=feed.filter(article=>!used.has(String(article.id||article.slug||article.title)));
+  $('#featured-articles').innerHTML=featuredStories.map(article=>articleCard(article)).join('');
+  $('#top-stories').innerHTML=editorStories.map((article,index)=>articleCard(article,index>0)).join('');
+  $('#latest-news').innerHTML=latestStories.map(article=>articleCard(article)).join('');
+  $('#trending-news').innerHTML=trendingStories.map(article=>articleCard(article,true)).join('');
+  const mostRead=$('#most-read')||$('.ranked-list');if(mostRead)mostRead.innerHTML=mostReadStories.map(article=>`<li><a href="/news/${encodeURIComponent(article.id)}">${esc(article.title)}</a></li>`).join('');
   $('#category-tiles').innerHTML=categories.map(([name,icon])=>{const stories=categoryStories(feed,name);const latest=stories[0];const label=stories.length?`${stories.length} live ${stories.length===1?'story':'stories'}`:'Live desk';const detail=latest?.title||'Fresh verified reporting is on the way.';return `<a data-aos="zoom-in" class="category-tile" href="${categoryUrl(name)}"><i class="fa-solid ${icon}"></i><strong>${name}</strong><small>${label}</small><span class="category-tile__headline" title="${esc(detail)}">${esc(detail)}</span></a>`;}).join('');
   $('#videos').innerHTML=liveVideos.length?liveVideos.slice(0,3).map(videoCard).join(''):videoEmptyState();
   $('#gallery').innerHTML=gallery.map(item=>`<a class="gallery-item" href="${link('pages/gallery.html')}"><img src="${item.image}" alt="${esc(item.title)}" loading="lazy"><span>${esc(item.title)}</span></a>`).join('');
   renderNewsletter($('#newsletter'));
-  $('#load-more')?.addEventListener('click',event=>{event.currentTarget.remove();$('#latest-news').insertAdjacentHTML('beforeend',feed.slice(10).map(article=>articleCard(article)).join(''));if(window.AOS)AOS.refresh();});
+  $('#load-more')?.addEventListener('click',event=>{event.currentTarget.remove();$('#latest-news').insertAdjacentHTML('beforeend',remainingStories.map(article=>articleCard(article)).join(''));if(window.AOS)AOS.refresh();});
   if(window.Swiper)new Swiper('.hero-swiper',{loop:feed.length>1,speed:750,autoplay:{delay:5000,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true}});
   if(window.gsap)gsap.from('.featured-strip article',{y:26,opacity:0,stagger:.12,duration:.55,delay:.25});
 }
