@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: lk-newsroom-web
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm run start
+    autoDeploy: true
+  - type: cron
+    name: lk-newsroom-worker
+    runtime: node
+    schedule: "*/5 * * * *"
+    buildCommand: npm ci
+    startCommand: npm run worker:once

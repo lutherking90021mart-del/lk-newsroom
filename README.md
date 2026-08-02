@@ -1,0 +1,130 @@
+# LK Newsroom
+
+LK Newsroom is a responsive TV-news style website and editorial dashboard. It uses Supabase for data/authentication, authorised publisher RSS/API feeds for aggregation, and a server-side worker for scheduled updates.
+
+## Included
+
+- Responsive homepage, breaking ticker, dynamic category pages, search, live updates, newsletter, video/gallery pages, legal pages, and 404 screen.
+- One canonical article URL per story: `/news/<article-id>`.
+- Dynamic cards that show the article image, category, headline, description, source, published time, and reading time.
+- Database-driven article view with original-source attribution/link, source mark, gallery, video, related stories, more from source, previous/next stories, sharing, and moderated comments.
+- Supabase schema, RLS policies, storage buckets, Auth roles, source catalogue, live-news migration, realtime subscriptions, feed logs, worker logs, and a dashboard status panel.
+- An official-RSS/licensed-API aggregation worker. It does not scrape publisher web pages.
+
+## Local setup (Windows)
+
+1. Install Node.js 20 or newer.
+2. Open PowerShell in the project folder.
+3. Copy `.env.example` to `.env`, then set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GUARDIAN_API_KEY`, and `NEWS_API_KEY` there. Do not paste keys into `.env.example`.
+4. Run `npm.cmd install` once.
+5. Run `npm.cmd run dev`.
+6. Open `http://localhost:5173`.
+
+Use `npm.cmd` in PowerShell if Windows blocks `npm.ps1` because of the execution policy. Keep that PowerShell window open while testing locally; closing it stops the local server and worker.
+
+## Supabase setup
+
+1. Create a project in Supabase.
+2. In SQL Editor, run `supabase/schema.sql` first.
+3. Then run `supabase/live-news.sql`. It creates the live-news source tables, feed/error logs, worker run history, and the database lock used to prevent overlapping jobs.
+4. Run `supabase/admin-cms-upgrade.sql` once. It enables real advertisement impression and click counters.
+5. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
+6. Set only the public Supabase URL and publishable/anon key in `js/config.js`. Never put the service-role key in this browser file.
+7. Create a row for your account in `users_roles` with the `super_admin` role.
+8. Enable Supabase Realtime for `articles`, `comments`, `breaking_news`, and `live_updates`.
+
+If a service-role key was copied into a screenshot or chat, rotate it in Supabase before deployment.
+
+## Dynamic articles
+
+The web server sends `/news/:identifier` to the article shell. The browser then requests `GET /v1/news/:identifier`, where `identifier` is either the database UUID or slug. Therefore every card opens the exact article that was clicked, for example:
+
+```text
+/news/125
+/news/241
+/news/381
+```
+
+For a real Supabase UUID, the URL has the same form, for example `/news/bf5b5a68-...`. Cards only use the professional `assets/default-news.svg` artwork if the source record has no featured image or that image fails to load.
+
+## Live news worker
+
+`worker/newsWorker.ts` is the single run coordinator. It uses a Supabase database lease so only one run can write at a time, even if two hosting schedulers fire together.
+
+The worker:
+
+- fetches configured official RSS/API sources with retries;
+- avoids same-source duplicates by external ID and cross-source duplicates by a normalised content hash;
+- updates existing source articles;
+- stores RSS/API supplied images (optionally in Supabase Storage), categories, summary, SEO description, tags, breaking alerts, trending stories, featured stories, and live updates;
+- logs each source sync to `feed_logs` and every overall run to `worker_runs`;
+- alerts an optional private webhook after repeated source failures.
+
+Environment options in `.env`:
+
+```text
+CRON_SECRET=long-random-secret
+ENABLE_NODE_CRON=true
+DOWNLOAD_FEED_IMAGES=false
+SOURCE_FAILURE_THRESHOLD=3
+ADMIN_ALERT_WEBHOOK=
+```
+
+`POST` or `GET /api/news/update` triggers a run. In production it accepts either `Authorization: Bearer <CRON_SECRET>` or an authenticated newsroom staff token.
+
+## Deploy for 24/7 updates
+
+Choose one scheduler. Do not enable several intentionally; the database lock is a safety net, not a substitute for one clear production schedule.
+
+### Vercel
+
+- Deploy the project with the environment variables above, including `CRON_SECRET`.
+- `vercel.json` schedules `/api/news/update` every five minutes.
+- `api/news/update.ts` verifies the Vercel cron secret and runs one worker pass.
+- Set `ENABLE_NODE_CRON=false` on Vercel.
+
+### Railway
+
+- Deploy the web service with `railway.json` and use `npm run start`.
+- Add a second Railway **Cron** service in its dashboard, with schedule `*/5 * * * *` and start command `npm run worker:once`.
+- Give both services the same Supabase variables. Set `ENABLE_NODE_CRON=false` in the web service.
+
+### Render
+
+- Deploy the web service and cron worker in `render.yaml`.
+- Give both services the same Supabase variables in the Render dashboard.
+- Set `ENABLE_NODE_CRON=false` for the Render web service, because the separate cron service calls `npm run worker:once`.
+
+### VPS with PM2
+
+- Copy `.env` securely to the server and install dependencies with `npm ci`.
+- Start with `pm2 start ecosystem.config.cjs` and run `pm2 save` plus startup configuration for your server.
+- Leave `ENABLE_NODE_CRON=true`. PM2 keeps the Node process alive and `node-cron` runs every five minutes.
+
+## Admin monitoring
+
+Open the dashboard after signing in. Its cards and tables are read from Supabase, not demo data. Use **Articles** to create, edit, publish, schedule, tag, upload an image, or delete your own stories. Use **Ads** to save a campaign with an image URL or uploaded image; active campaigns display in the matching public sidebar and record impressions/clicks after the CMS upgrade SQL is run. News Sources provides enable/disable and manual sync controls; Logs provides source-level run/error information.
+
+## Football coverage
+
+The Sports section includes the official BBC Sport Football RSS feed and a separate **News API Football** source. Put your real `NEWS_API_KEY` in `.env`, restart the server, then open **Admin → News Sources**, enable **News API Football**, and press **Sync**. The query can be adjusted with `NEWS_API_SPORTS_QUERY` in `.env`.
+
+## Source rights
+
+Only configure publisher-provided RSS endpoints, official APIs, or licensed syndication endpoints. Feeds/APIs that require a contract (for example Reuters, AP, Bloomberg, and some local publishers) remain disabled until their permitted endpoint is added to `.env`.
+
+## Project structure
+
+```text
+assets/       Brand assets and default news artwork
+styles/       Modular custom CSS
+js/           Browser components, dynamic pages, auth, and dashboard
+pages/        HTML shells for public pages
+admin/        Dashboard HTML shells
+server/       Express site/API server
+worker/       Scheduled worker and enrichment helpers
+api/          Vercel cron route
+services/     Aggregation, cache, enrichment, and notifications
+providers/    Normalised official RSS/API providers
+supabase/     Schema, security policies, storage, and live-news migration
+```

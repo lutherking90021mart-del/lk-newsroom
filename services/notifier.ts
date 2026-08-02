@@ -1,0 +1,2 @@
+/** Posts repeated source failures to a private Slack/Teams/email automation webhook when configured. */
+export async function notifyAdminOfSourceFailure(source:string,error:string,failures:number){const webhook=process.env.ADMIN_ALERT_WEBHOOK;if(!webhook)return false;try{const response=await fetch(webhook,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:`LK Newsroom: ${source} has failed ${failures} consecutive syncs. Latest error: ${error}`})});return response.ok;}catch{return false;}}

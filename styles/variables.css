@@ -1,0 +1,3 @@
+/* LK Newsroom design tokens */
+:root { --navy:#003366; --blue:#0057b8; --red:#e31e24; --ink:#142333; --muted:#627282; --line:#e3e9ef; --surface:#fff; --surface-alt:#f4f7fa; --dark:#0b1724; --shadow:0 14px 40px rgba(0,35,70,.09); --radius:14px; --radius-sm:8px; --container:1220px; --font-sans:"Inter",Arial,sans-serif; --font-display:"Playfair Display",Georgia,serif; --ease:cubic-bezier(.2,.75,.25,1); }
+[data-theme="dark"] { --ink:#eef4f8; --muted:#a7b4c0; --line:#233445; --surface:#101d2a; --surface-alt:#0b1724; --shadow:0 14px 40px rgba(0,0,0,.23); }

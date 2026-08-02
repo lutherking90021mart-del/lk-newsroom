@@ -1,0 +1,1 @@
+export class TimedCache<T> { private store=new Map<string,{value:T;expiresAt:number}>(); get(key:string){const hit=this.store.get(key);if(!hit||hit.expiresAt<Date.now()){this.store.delete(key);return undefined;}return hit.value;} set(key:string,value:T,ttlMs:number){this.store.set(key,{value,expiresAt:Date.now()+ttlMs});return value;} }

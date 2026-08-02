@@ -1,0 +1,3 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+/** An external ID stops same-source duplicates; title hash stops cross-source copies of the same wire story. */
+export async function findDuplicate(db:SupabaseClient,sourceId:string,externalId:string,contentHash:string){const {data:existing,error}=await db.from('articles').select('id').eq('source_id',sourceId).eq('external_id',externalId).maybeSingle();if(error)throw error;if(existing)return {existingId:existing.id,kind:'existing' as const};const {data:same,error:sameError}=await db.from('articles').select('id').eq('content_hash',contentHash).limit(1).maybeSingle();if(sameError)throw sameError;return same?{existingId:same.id,kind:'cross_source' as const}:null;}

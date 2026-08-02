@@ -1,0 +1,2 @@
+import { configuredRss } from './rss.js';
+export const sportsProviders=[configuredRss('espn','ESPN','ESPN_RSS_URL','United States','Sports'),configuredRss('sky-sports','Sky Sports','SKY_SPORTS_RSS_URL','United Kingdom','Sports'),configuredRss('goal','Goal.com','GOAL_RSS_URL','International','Sports'),configuredRss('caf','CAF','CAF_RSS_URL','Africa','Sports'),configuredRss('fifa','FIFA','FIFA_RSS_URL','International','Sports')];

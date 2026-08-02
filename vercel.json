@@ -1,0 +1,1 @@
+{"$schema":"https://openapi.vercel.sh/vercel.json","crons":[{"path":"/api/news/update","schedule":"*/5 * * * *"}],"rewrites":[{"source":"/news/:path*","destination":"/pages/article.html"}]}

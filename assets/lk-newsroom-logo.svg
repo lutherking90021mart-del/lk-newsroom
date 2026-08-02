@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 92" role="img" aria-labelledby="title desc">
+  <title id="title">LK Newsroom</title><desc id="desc">LK Newsroom logo</desc>
+  <rect width="92" height="92" rx="12" fill="#003366"/>
+  <path d="M20 20h14v38h22v13H20V20Zm42 0h14v19l16-19h17L89 43l22 28H93L78 51l-2 3v17H62V20Z" fill="#fff"/>
+  <text x="110" y="44" fill="#003366" font-family="Arial, sans-serif" font-weight="800" font-size="31" letter-spacing="1">NEWSROOM</text>
+  <rect x="112" y="56" width="188" height="4" fill="#E31E24"/><text x="112" y="78" fill="#536270" font-family="Arial, sans-serif" font-size="12" letter-spacing="1.6">INFORMING TODAY</text>
+</svg>
