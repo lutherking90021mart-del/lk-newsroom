@@ -62,13 +62,21 @@ app.get('/v1/news',async(req,res)=>{
   // Offset pagination keeps every section useful as the newsroom grows beyond its first stories.
   const limit=Math.min(Math.max(Number(req.query.limit)||30,1),48);
   const offset=Math.min(Math.max(Number(req.query.offset)||0,0),4_800);
-  let query=db.from('articles').select(publicArticleFields,{count:'exact'}).eq('status','published').eq('is_aggregated',true).is('duplicate_of',null).order('published_at',{ascending:false});
+  const view=typeof req.query.view==='string'?req.query.view:'latest';
+  const sortByViews=view==='trending'||view==='most-read';
+  let query=db.from('articles').select(publicArticleFields,{count:'exact'}).eq('status','published').eq('is_aggregated',true).is('duplicate_of',null).order(sortByViews?'view_count':'published_at',{ascending:false}).order('published_at',{ascending:false});
   if(typeof req.query.category==='string')query=query.eq('categories.slug',req.query.category);
   if(typeof req.query.country==='string')query=query.eq('country',req.query.country);
   if(typeof req.query.author==='string')query=query.ilike('authors.name',`%${req.query.author.slice(0,80)}%`);
   if(typeof req.query.q==='string')query=query.ilike('title',`%${req.query.q.slice(0,80)}%`);
   if(typeof req.query.from==='string')query=query.gte('published_at',req.query.from);
   if(typeof req.query.to==='string')query=query.lte('published_at',req.query.to);
+  if(view==='today'||view==='week'){
+    const start=new Date();
+    start.setHours(0,0,0,0);
+    if(view==='week')start.setDate(start.getDate()-6);
+    query=query.gte('published_at',start.toISOString());
+  }
   if(typeof req.query.source==='string'){
     const {data:source}=await db.from('news_sources').select('id').eq('slug',req.query.source).maybeSingle();
     if(source)query=query.eq('source_id',source.id);
@@ -164,6 +172,8 @@ app.all('/api/news/update',requireCronOrStaff,async(req,res)=>runManualWorker(re
 
 // A human-readable canonical route for every article. The browser then requests only that article's data.
 app.get('/news/:identifier',(_req,res)=>res.sendFile(`${process.cwd()}/pages/article.html`));
+// Each desk has its own stable URL, while a single reusable page loads the selected category.
+app.get('/category/:slug',(_req,res)=>res.sendFile(`${process.cwd()}/pages/category.html`));
 const port=Number(process.env.PORT||5173);
 app.use(express.static(process.cwd()));
 app.use((_req,res)=>res.status(404).sendFile(`${process.cwd()}/404.html`));

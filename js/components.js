@@ -3,6 +3,7 @@ import { categories } from './data.js';
 const root = () => document.body.dataset.root || '.';
 const link = (path) => `${root()}/${path}`;
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const categoryUrl=name=>link(`category/${String(name).toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}`);
 
 /** Every story card has a single, full-card link to its own canonical /news/:id route. */
 export function articleCard(article, compact = false) {
@@ -12,8 +13,8 @@ export function articleCard(article, compact = false) {
 }
 
 export function renderHeader(active = '') {
-  const nav = [['Home','index.html'],['Latest','pages/category.html?category=Latest'],['Politics','pages/category.html?category=Politics'],['Business','pages/category.html?category=Business'],['Technology','pages/category.html?category=Technology'],['Sports','pages/category.html?category=Sports'],['More','pages/category.html?category=World']];
-  const links = nav.map(([label,url]) => `<a class="${active === label.toLowerCase() ? 'active':''}" href="${link(url)}">${label}</a>`).join('');
+  const nav = [['Home',link('index.html')],['Latest',categoryUrl('Latest')],['Politics',categoryUrl('Politics')],['Business',categoryUrl('Business')],['Technology',categoryUrl('Technology')],['Sports',categoryUrl('Sports')],['World',categoryUrl('World')]];
+  const links = nav.map(([label,url]) => `<a class="${active === label.toLowerCase() ? 'active':''}" href="${url}">${label}</a>`).join('');
   const header = document.querySelector('[data-site-header]');
   if (!header) return;
   header.innerHTML = `<a class="skip-link" href="#main-content">Skip to content</a><div class="topbar"><div class="container"><span><i class="fa-regular fa-calendar"></i> <span data-today></span></span><div class="topbar-links"><a href="${link('pages/about.html')}">About</a><a href="${link('pages/contact.html')}">Contact</a><a href="${link('pages/advertise.html')}">Advertise</a></div></div></div><header class="site-header"><div class="container header-main"><a href="${link('index.html')}" aria-label="LK Newsroom home"><img class="brand" src="${link('assets/lk-newsroom-logo.png')}" alt="LK Newsroom"></a><nav class="primary-nav" aria-label="Primary navigation">${links}</nav><div class="header-actions"><a class="icon-button" href="${link('pages/search.html')}" aria-label="Search"><i class="fa-solid fa-magnifying-glass"></i></a><button class="icon-button" id="theme-toggle" aria-label="Toggle dark mode"><i class="fa-regular fa-moon"></i></button><button class="icon-button menu-button" id="menu-toggle" aria-label="Open menu"><i class="fa-solid fa-bars"></i></button></div></div><nav class="mobile-menu" id="mobile-menu" aria-label="Mobile navigation">${links}<a href="${link('pages/live.html')}"><span class="badge">Live</span> Live updates</a></nav></header>`;
@@ -32,7 +33,7 @@ export function renderNewsletter(target) {
 
 export function renderFooter() {
   const el = document.querySelector('[data-site-footer]'); if (!el) return;
-  const catLinks = categories.slice(0,6).map(([name])=>`<li><a href="${link(`pages/category.html?category=${name}`)}">${name}</a></li>`).join('');
+  const catLinks = categories.slice(0,6).map(([name])=>`<li><a href="${categoryUrl(name)}">${name}</a></li>`).join('');
   el.innerHTML = `<footer class="site-footer"><div class="container footer-main"><div><img class="footer-logo" src="${link('assets/lk-newsroom-logo.png')}" alt="LK Newsroom"><p>Independent reporting, clear context and the stories that shape our world.</p><div class="socials" aria-label="Follow LK Newsroom"><a href="https://www.facebook.com/profile.php?id=61570722200277" target="_blank" rel="noopener noreferrer" aria-label="Follow LK Newsroom on Facebook"><i class="fa-brands fa-facebook-f"></i></a><a href="https://www.instagram.com/lk.news.global/" target="_blank" rel="noopener noreferrer" aria-label="Follow LK Newsroom on Instagram"><i class="fa-brands fa-instagram"></i></a><a href="https://www.tiktok.com/@lk.news.global1" target="_blank" rel="noopener noreferrer" aria-label="Follow LK Newsroom on TikTok"><i class="fa-brands fa-tiktok"></i></a><a href="https://www.threads.com/@lk.news.global" target="_blank" rel="noopener noreferrer" aria-label="Follow LK Newsroom on Threads"><i class="fa-brands fa-threads"></i></a></div></div><div><h4>Sections</h4><ul class="footer-links">${catLinks}</ul></div><div><h4>Explore</h4><ul class="footer-links"><li><a href="${link('pages/live.html')}">Live Updates</a></li><li><a href="${link('pages/video-news.html')}">Video News</a></li><li><a href="${link('pages/gallery.html')}">Photo Gallery</a></li><li><a href="${link('pages/newsletter.html')}">Newsletter</a></li><li><a href="${link('pages/search.html')}">Search</a></li></ul></div><div><h4>Company</h4><ul class="footer-links"><li><a href="${link('pages/about.html')}">About us</a></li><li><a href="${link('pages/contact.html')}">Contact</a></li><li><a href="${link('pages/privacy.html')}">Privacy policy</a></li><li><a href="${link('pages/terms.html')}">Terms of use</a></li><li><a href="${link('pages/advertise.html')}">Advertise</a></li></ul></div></div><div class="container footer-bottom"><span>© <span data-year></span> LK Newsroom. All rights reserved.</span><span>Informing Today, Inspiring Tomorrow</span></div></footer>`;
 }
 
