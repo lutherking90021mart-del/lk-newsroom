@@ -68,7 +68,13 @@ ENABLE_NODE_CRON=true
 DOWNLOAD_FEED_IMAGES=false
 SOURCE_FAILURE_THRESHOLD=3
 ADMIN_ALERT_WEBHOOK=
+GOOGLE_CUSTOM_SEARCH_API_KEY=
+GOOGLE_CUSTOM_SEARCH_ENGINE_ID=
 ```
+
+## Missing-image research
+
+For an editor-approved image lookup, create a Google Programmable Search Engine that permits image search, enable the Custom Search JSON API, and add `GOOGLE_CUSTOM_SEARCH_API_KEY` plus `GOOGLE_CUSTOM_SEARCH_ENGINE_ID` to the web service only. In **Admin → Articles**, stories without a featured image then show a picture button. It searches the article title—preferring the original publisher’s domain—and shows choices. An editor must choose an image before it is saved. Do not select images unless your publication has permission to use them.
 
 `POST` or `GET /api/news/update` triggers a run. In production it accepts either `Authorization: Bearer <CRON_SECRET>` or an authenticated newsroom staff token.
 

@@ -35,7 +35,7 @@ async function dashboard(){
   viewLoading();const db=api();
   const startOfToday=new Date();startOfToday.setHours(0,0,0,0);
   const [articleRows,allArticleViews,subscriberRows,categoryRows,profileRows,viewRows]=await Promise.all([
-    result(db.from('articles').select('id,title,slug,status,published_at,updated_at,view_count,categories(name),profiles(full_name),authors(name),news_sources(name)',{count:'exact'}).order('updated_at',{ascending:false}).limit(8)),
+    result(db.from('articles').select('id,title,slug,status,featured_image_url,original_url,published_at,updated_at,view_count,categories(name),profiles(full_name),authors(name),news_sources(name)',{count:'exact'}).order('updated_at',{ascending:false}).limit(8)),
     result(db.from('articles').select('view_count')),
     result(db.from('newsletter').select('id',{count:'exact',head:true})),
     result(db.from('categories').select('id',{count:'exact',head:true})),
@@ -46,9 +46,10 @@ async function dashboard(){
   const rows=articleRows.data||[];
   $('#admin-view').innerHTML=`<section class="stat-grid">${stat('Total articles',articleRows.count||0,'All statuses','fa-newspaper')}${stat('Article views',totalViews.toLocaleString(),'Stored article counter','fa-eye')}${stat('Page views',viewRows.count||0,'Tracked visits','fa-chart-line')}${stat('Subscribers',subscriberRows.count||0,'Newsletter list','fa-envelope')}${stat('Categories',categoryRows.count||0,'News sections','fa-folder-tree')}${stat('Writers',profileRows.count||0,'User profiles','fa-pen-nib')}</section><section class="admin-panels"><article class="panel"><h3>Recently updated</h3><ul class="activity">${rows.length?rows.map(row=>`<li><strong>${esc(row.title)}</strong><br><span class="meta">${statusBadge(row.status)} · ${esc(authorName(row))} · ${dateTime(row.updated_at)}</span></li>`).join(''):'<li class="text-muted">No articles yet.</li>'}</ul></article><article class="panel" id="worker-status"><h3>News worker</h3><div class="spinner"></div></article></section><section class="panel" style="margin-top:20px"><div class="section-heading"><h3>Recent articles</h3><a class="btn btn-outline" href="articles.html">Manage articles</a></div>${articleTable(rows)}</section>`;
   bindArticleDeletes(dashboard);
+  bindImageFinder(rows,dashboard);
   void loadWorkerStatus();
 }
-function articleTable(rows){return `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Article</th><th>Category</th><th>Author / Source</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>${rows.length?rows.map(row=>`<tr data-article-row><td><strong>${esc(row.title)}</strong><br><span class="meta">/${esc(row.slug||'')}</span></td><td>${esc(row.categories?.name||'Uncategorised')}</td><td>${esc(authorName(row))}</td><td>${statusBadge(row.status)}</td><td>${dateTime(row.updated_at||row.published_at)}</td><td><div class="table-actions"><a href="editor.html?id=${encodeURIComponent(row.id)}" title="Edit"><i class="fa-solid fa-pen"></i></a><button class="delete-article" data-id="${row.id}" title="Delete"><i class="fa-solid fa-trash"></i></button></div></td></tr>`).join(''):'<tr><td colspan="6" class="text-muted">No articles found.</td></tr>'}</tbody></table></div>`;}
+function articleTable(rows){return `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>Article</th><th>Category</th><th>Author / Source</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>${rows.length?rows.map(row=>`<tr data-article-row><td><strong>${esc(row.title)}</strong><br><span class="meta">/${esc(row.slug||'')}</span></td><td>${esc(row.categories?.name||'Uncategorised')}</td><td>${esc(authorName(row))}</td><td>${statusBadge(row.status)}</td><td>${dateTime(row.updated_at||row.published_at)}</td><td><div class="table-actions"><a href="editor.html?id=${encodeURIComponent(row.id)}" title="Edit"><i class="fa-solid fa-pen"></i></a>${row.featured_image_url?'':`<button class="find-image" data-id="${row.id}" title="Find an approved image"><i class="fa-solid fa-image"></i></button>`}<button class="delete-article" data-id="${row.id}" title="Delete"><i class="fa-solid fa-trash"></i></button></div></td></tr>`).join(''):'<tr><td colspan="6" class="text-muted">No articles found.</td></tr>'}</tbody></table></div>`;}
 
 function bindArticleDeletes(reload){
   document.querySelectorAll('.delete-article').forEach(button=>button.addEventListener('click',async()=>{
@@ -58,12 +59,35 @@ function bindArticleDeletes(reload){
   }));
 }
 
+function bindImageFinder(rows,reload){
+  document.querySelectorAll('.find-image').forEach(button=>button.addEventListener('click',async()=>{
+    const article=rows.find(row=>row.id===button.dataset.id);if(!article)return;
+    button.disabled=true;const old=button.innerHTML;button.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i>';
+    try{const payload=await aggregatorRequest('/v1/admin/image-search',{method:'POST',body:JSON.stringify({title:article.title,originalUrl:article.original_url})});showImageCandidates(article,payload.data||[],reload);}
+    catch(error){toast(error.message||'Unable to find image choices.');}
+    finally{button.disabled=false;button.innerHTML=old;}
+  }));
+}
+
+function showImageCandidates(article,candidates,reload){
+  if(!candidates.length){toast('No image choices were found.');return;}
+  const overlay=document.createElement('div');overlay.className='image-finder-overlay';
+  overlay.innerHTML=`<section class="image-finder-dialog" role="dialog" aria-modal="true" aria-label="Choose a featured image"><button class="icon-button image-finder-close" aria-label="Close image choices"><i class="fa-solid fa-xmark"></i></button><span class="eyebrow">Image research</span><h2>${esc(article.title)}</h2><p class="text-muted">Choose only an image you are permitted to use. The image is not saved until you select it.</p><div class="image-candidate-grid">${candidates.map((item,index)=>`<button class="image-candidate" data-index="${index}"><img src="${esc(item.thumbnailUrl)}" alt="" loading="lazy"><span><strong>${esc(item.title)}</strong><small>${esc(item.sourceName)}</small></span></button>`).join('')}</div></section>`;
+  const close=()=>overlay.remove();overlay.querySelector('.image-finder-close')?.addEventListener('click',close);overlay.addEventListener('click',event=>{if(event.target===overlay)close();});
+  overlay.querySelectorAll('.image-candidate').forEach(button=>button.addEventListener('click',async()=>{
+    const candidate=candidates[Number(button.dataset.index)];if(!candidate)return;
+    button.disabled=true;try{await result(api().from('articles').update({featured_image_url:candidate.imageUrl}).eq('id',article.id));toast('Featured image saved.');close();await reload();}catch(error){button.disabled=false;toast(error.message||'Unable to save image.');}
+  }));
+  document.body.append(overlay);
+}
+
 async function articlesManager(draftsOnly=false){
-  viewLoading();const db=api();let query=db.from('articles').select('id,title,slug,status,excerpt,published_at,updated_at,view_count,categories(name),profiles(full_name),authors(name),news_sources(name)').order('updated_at',{ascending:false}).limit(100);
+  viewLoading();const db=api();let query=db.from('articles').select('id,title,slug,status,excerpt,featured_image_url,original_url,published_at,updated_at,view_count,categories(name),profiles(full_name),authors(name),news_sources(name)').order('updated_at',{ascending:false}).limit(100);
   if(draftsOnly)query=query.in('status',['draft','scheduled']);
   const {data}=await result(query);const rows=data||[];
   $('#admin-view').innerHTML=`<section class="panel"><div style="display:flex;justify-content:space-between;gap:15px;align-items:center;margin-bottom:18px"><input id="article-filter" class="form-control" style="max-width:360px" placeholder="Search loaded articles"><a class="btn btn-primary" href="editor.html"><i class="fa-solid fa-plus"></i> New article</a></div>${articleTable(rows)}</section>`;
   $('#article-filter')?.addEventListener('input',event=>{const term=event.target.value.toLowerCase();document.querySelectorAll('[data-article-row]').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(term));});
+  bindImageFinder(rows,()=>articlesManager(draftsOnly));
   document.querySelectorAll('.delete-article').forEach(button=>button.addEventListener('click',async()=>{if(!confirm('Delete this article permanently?'))return;try{await result(db.from('articles').delete().eq('id',button.dataset.id));toast('Article deleted.');await articlesManager(draftsOnly);}catch(error){toast(error.message);}}));
 }
 

@@ -4,6 +4,7 @@ import cors from 'cors';
 import cron from 'node-cron';
 import {createClient} from '@supabase/supabase-js';
 import {NewsWorker} from '../worker/newsWorker.js';
+import {findImageCandidates} from '../services/googleImageSearch.js';
 
 const url=process.env.SUPABASE_URL;
 const serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -145,6 +146,16 @@ async function runManualWorker(req:Request,res:Response,trigger:'manual'|'cron'|
 app.post('/v1/admin/sync',requireStaff,async(req,res)=>{
   if(!await editorialRole((req as StaffRequest).userId!))return res.status(403).json({error:'Editorial role required'});
   return runManualWorker(req,res,'manual');
+});
+
+// Image research uses Google's official API and returns choices for an editor to approve.
+// It never scrapes Google result pages and does not automatically copy a result into an article.
+app.post('/v1/admin/image-search',requireStaff,async(req,res)=>{
+  const title=typeof req.body?.title==='string'?req.body.title.trim():'';
+  const originalUrl=typeof req.body?.originalUrl==='string'?req.body.originalUrl.trim():undefined;
+  if(!title)return res.status(400).json({error:'Article title is required for image search.'});
+  try{res.json({data:await findImageCandidates(title,originalUrl,5)});}
+  catch(error){res.status(500).json({error:error instanceof Error?error.message:'Image search failed.'});}
 });
 app.all('/api/news/update',requireCronOrStaff,async(req,res)=>runManualWorker(req,res,'cron'));
 
