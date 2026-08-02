@@ -18,10 +18,14 @@ export function fabrizioRomanoProvider():NewsProvider{
       if(!token||!handle)return [];
       let userId=configuredId;
       if(!userId){
-        const response=await fetch(`https://api.x.com/2/users/by/username/${encodeURIComponent(handle)}`,{headers,signal:AbortSignal.timeout(15_000)});
-        if(!response.ok)throw new Error(`X API user lookup returned ${response.status}`);
-        const payload=await response.json() as any;userId=payload.data?.id;
-        if(!userId)throw new Error(`X API could not find @${handle}`);
+        // X exposes both username lookup forms. Try both because access plans can differ.
+        const direct=await fetch(`https://api.x.com/2/users/by/username/${encodeURIComponent(handle)}`,{headers,signal:AbortSignal.timeout(15_000)});
+        let payload:any=direct.ok?await direct.json():null;userId=payload?.data?.id;
+        if(!userId){
+          const listed=await fetch(`https://api.x.com/2/users/by?${new URLSearchParams({usernames:handle})}`,{headers,signal:AbortSignal.timeout(15_000)});
+          payload=listed.ok?await listed.json():await listed.json().catch(()=>null);userId=payload?.data?.[0]?.id;
+          if(!userId){const detail=payload?.detail||payload?.title||payload?.errors?.[0]?.detail||`HTTP ${direct.status}/${listed.status}`;throw new Error(`X API could not resolve @${handle}: ${detail}`);}
+        }
       }
       const params=new URLSearchParams({max_results:'20',exclude:'retweets,replies','tweet.fields':'created_at,attachments','expansions':'attachments.media_keys','media.fields':'url,preview_image_url,type'});
       const response=await fetch(`https://api.x.com/2/users/${encodeURIComponent(userId)}/tweets?${params}`,{headers,signal:AbortSignal.timeout(15_000)});
