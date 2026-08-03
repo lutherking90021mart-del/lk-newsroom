@@ -1,10 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { decryptSocialToken } from '../services/socialCrypto.js';
+import { decryptSocialToken, encryptSocialToken } from '../services/socialCrypto.js';
 import { defaultSocialTemplates, ensureSocialGraphics, graphicUrlForPlatform, hasCompleteSocialGraphicAssets, renderSocialGraphicSvg, type SocialGraphicArticle, type SocialGraphicAssets } from '../services/socialGraphics.js';
 
 export const socialPlatforms=['facebook','instagram','threads','x','linkedin','telegram'] as const;
 export type SocialPlatform=typeof socialPlatforms[number];
-type Account={id:string;platform:SocialPlatform;display_name:string;account_id:string;credential_key?:string|null;credentials_encrypted?:string|null;enabled:boolean;auto_post:boolean;category_slugs?:string[];posting_delay_minutes:number;post_template:string;auto_post_from:string;created_at?:string;metadata?:Record<string,unknown>;last_success_at?:string|null;};
+type Account={id:string;platform:SocialPlatform;display_name:string;account_id:string;credential_key?:string|null;credentials_encrypted?:string|null;refresh_token_encrypted?:string|null;token_expires_at?:string|null;enabled:boolean;auto_post:boolean;category_slugs?:string[];posting_delay_minutes:number;post_template:string;auto_post_from:string;created_at?:string;metadata?:Record<string,unknown>;last_success_at?:string|null;};
 type Article=SocialGraphicArticle & {created_at?:string|null;country?:string|null;auto_tags?:string[]|null;};
 type SocialPost={id:string;account_id:string;article_id:string;platform:SocialPlatform;post_text:string;article_url:string;image_url?:string|null;attempts:number;max_attempts:number;next_attempt_at?:string|null;social_accounts:Account;articles:Article;};
 export type SocialRunResult={status:'completed'|'skipped'|'unavailable';queued:number;published:number;retried:number;failed:number;activatedScheduled:number;graphicsGenerated:number;errors:number;};
@@ -39,17 +39,32 @@ function postText(article:Article,account:Account){
   const values:Record<string,string>={headline:article.title,summary,url:articleUrl(article),hashtags:hashtags(article),breaking:article.breaking?'🚨 BREAKING NEWS\n\n':''};
   return (account.post_template||'{breaking}{headline}\n\n{summary}\n\nRead more:\n{url}\n\n{hashtags}').replace(/\{(headline|summary|url|hashtags|breaking)\}/g,(_match,key)=>values[key]||'').replace(/\n{3,}/g,'\n\n').trim();
 }
-function tokenFor(account:Account){
+async function apiRequest(url:string,init:RequestInit){
+  const response=await fetch(url,{...init,signal:AbortSignal.timeout(25_000)});const payload=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(payload?.error?.message||payload?.error_description||payload?.description||payload?.detail||`Platform returned ${response.status}`);
+  return payload as Record<string,any>;
+}
+const form=(values:Record<string,string>)=>new URLSearchParams(Object.entries(values).filter(([,value])=>value!==undefined&&value!==null) as [string,string][]).toString();
+
+function validEnvValue(name:string){const value=String(process.env[name]||'').trim();if(!value||/^(your[_-]|replace[_-]|change[_-]|example)/i.test(value))throw new Error(`Add the real ${name} value in Railway.`);return value;}
+async function refreshXToken(db:SupabaseClient,account:Account){
+  if(!account.refresh_token_encrypted)throw new Error('The X connection has expired. Reconnect X in Admin → Social Media.');
+  const clientId=validEnvValue('X_CLIENT_ID');const clientSecret=validEnvValue('X_CLIENT_SECRET');
+  const refreshToken=decryptSocialToken(account.refresh_token_encrypted);
+  const payload=await apiRequest('https://api.x.com/2/oauth2/token',{method:'POST',headers:{Authorization:`Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,'Content-Type':'application/x-www-form-urlencoded'},body:form({refresh_token:refreshToken,grant_type:'refresh_token'})});
+  const accessToken=String(payload.access_token||'');if(!accessToken)throw new Error('X did not return a refreshed access token. Reconnect X in Admin → Social Media.');
+  const expiresAt=Number(payload.expires_in||0)?new Date(Date.now()+Number(payload.expires_in)*1000).toISOString():null;
+  const update={credentials_encrypted:encryptSocialToken(accessToken),token_expires_at:expiresAt,refresh_token_encrypted:payload.refresh_token?encryptSocialToken(String(payload.refresh_token)):account.refresh_token_encrypted,last_error:null};
+  const {error}=await db.from('social_accounts').update(update).eq('id',account.id);if(error)throw error;
+  Object.assign(account,update);return accessToken;
+}
+async function tokenFor(db:SupabaseClient,account:Account){
+  const expiresAt=account.token_expires_at?new Date(account.token_expires_at).getTime():0;
+  if(account.platform==='x'&&account.refresh_token_encrypted&&(!expiresAt||expiresAt<Date.now()+5*60_000))return refreshXToken(db,account);
   if(account.credentials_encrypted)return decryptSocialToken(account.credentials_encrypted);
   const key=account.credential_key?.trim();if(key&&process.env[key])return process.env[key]!;
   throw new Error(`No server credential is available for ${account.display_name}. Add the token in Railway and set its variable name on the account.`);
 }
-async function apiRequest(url:string,init:RequestInit){
-  const response=await fetch(url,{...init,signal:AbortSignal.timeout(25_000)});const payload=await response.json().catch(()=>({}));
-  if(!response.ok)throw new Error(payload?.error?.message||payload?.description||payload?.detail||`Platform returned ${response.status}`);
-  return payload as Record<string,any>;
-}
-const form=(values:Record<string,string>)=>new URLSearchParams(Object.entries(values).filter(([,value])=>value!==undefined&&value!==null) as [string,string][]).toString();
 
 async function publishFacebook(account:Account,post:SocialPost,token:string){
   const image=post.image_url||'';const message=post.post_text;
@@ -89,8 +104,8 @@ async function publishTelegram(account:Account,post:SocialPost,token:string){
   return {id:String(payload.result?.message_id||''),url:''};
 }
 
-async function publish(account:Account,post:SocialPost){
-  const token=tokenFor(account);
+async function publish(db:SupabaseClient,account:Account,post:SocialPost){
+  const token=await tokenFor(db,account);
   const trackingUrl=`${origin()}/go/social/${encodeURIComponent(post.id)}`;
   const outgoing={...post,article_url:trackingUrl,post_text:post.post_text.replace(post.article_url,trackingUrl)};
   if(account.platform==='facebook')return publishFacebook(account,outgoing,token);
@@ -157,7 +172,7 @@ export class SocialPublisher {
       const account=post.social_accounts;if(!account?.enabled){await this.db.from('social_posts').update({status:'cancelled',last_error:'Social account disabled.'}).eq('id',post.id);continue;}
       const attempts=Number(post.attempts||0)+1;await this.db.from('social_posts').update({status:'processing',attempts,locked_at:now.toISOString()}).eq('id',post.id);
       try{
-        const result=await publish(account,post);const postedAt=new Date().toISOString();
+        const result=await publish(this.db,account,post);const postedAt=new Date().toISOString();
         await this.db.from('social_posts').update({status:'published',posted_at:postedAt,platform_post_id:result.id||null,platform_post_url:result.url||null,locked_at:null,next_attempt_at:null,last_error:null}).eq('id',post.id);
         await this.db.from('social_accounts').update({last_success_at:postedAt,last_error:null}).eq('id',account.id);
         await this.log(post,'info','published','Post published successfully.',{platformPostId:result.id});published++;

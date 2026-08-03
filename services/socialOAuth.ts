@@ -10,22 +10,27 @@ const graphVersion=()=>process.env.META_GRAPH_VERSION||'v23.0';
 const enc=(value:string)=>encodeURIComponent(value);
 const random=()=>crypto.randomBytes(32).toString('base64url');
 const callbackFor=(platform:OAuthPlatform)=>`${publicOrigin()}/v1/social/oauth/${platform}/callback`;
+function requiredOAuthVariable(name:string){
+  const value=String(process.env[name]||'').trim();
+  if(!value||/^(your[_-]|replace[_-]|change[_-]|example)/i.test(value))throw new Error(`Add the real ${name} value in Railway before connecting this account.`);
+  return value;
+}
 
 function assertPlatform(value:string):asserts value is OAuthPlatform{if(!socialPlatforms.includes(value as SocialPlatform)||value==='telegram')throw new Error('OAuth is available for Facebook, Instagram, Threads, X, and LinkedIn. Telegram uses a Bot token instead.');}
 function oauthConfiguration(platform:OAuthPlatform){
   if(platform==='facebook'||platform==='instagram'){
-    const clientId=process.env.META_APP_ID,clientSecret=process.env.META_APP_SECRET;if(!clientId||!clientSecret)throw new Error('Add META_APP_ID and META_APP_SECRET in Railway before connecting Meta accounts.');
+    const clientId=requiredOAuthVariable('META_APP_ID'),clientSecret=requiredOAuthVariable('META_APP_SECRET');if(!/^\d{5,}$/.test(clientId))throw new Error('META_APP_ID must be the numeric App ID from Meta for Developers, not a page ID or placeholder.');
     return {clientId,clientSecret};
   }
   if(platform==='threads'){
-    const clientId=process.env.THREADS_APP_ID,clientSecret=process.env.THREADS_APP_SECRET;if(!clientId||!clientSecret)throw new Error('Add THREADS_APP_ID and THREADS_APP_SECRET in Railway before connecting Threads.');
+    const clientId=requiredOAuthVariable('THREADS_APP_ID'),clientSecret=requiredOAuthVariable('THREADS_APP_SECRET');
     return {clientId,clientSecret};
   }
   if(platform==='x'){
-    const clientId=process.env.X_CLIENT_ID,clientSecret=process.env.X_CLIENT_SECRET;if(!clientId||!clientSecret)throw new Error('Add X_CLIENT_ID and X_CLIENT_SECRET in Railway before connecting X.');
+    const clientId=requiredOAuthVariable('X_CLIENT_ID'),clientSecret=requiredOAuthVariable('X_CLIENT_SECRET');
     return {clientId,clientSecret};
   }
-  const clientId=process.env.LINKEDIN_CLIENT_ID,clientSecret=process.env.LINKEDIN_CLIENT_SECRET;if(!clientId||!clientSecret)throw new Error('Add LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET in Railway before connecting LinkedIn.');
+  const clientId=requiredOAuthVariable('LINKEDIN_CLIENT_ID'),clientSecret=requiredOAuthVariable('LINKEDIN_CLIENT_SECRET');
   return {clientId,clientSecret};
 }
 function headersForm(){return {'Content-Type':'application/x-www-form-urlencoded'};}
