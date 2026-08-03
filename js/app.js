@@ -69,7 +69,7 @@ function initShell(){
 }
 function renderHero(stories=feed.slice(0,3)){
   const wrapper=$('.hero-swiper .swiper-wrapper');if(!wrapper||!stories.length)return;
-  wrapper.innerHTML=stories.map(article=>`<article class="swiper-slide hero-slide" style="background-image:url('${esc(article.image)}')"><div class="hero-content"><span class="badge">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p>${esc(article.excerpt)}</p><a class="btn btn-primary" href="/news/${encodeURIComponent(article.id)}">Read the full story <i class="fa-solid fa-arrow-right"></i></a></div></article>`).join('');
+  wrapper.innerHTML=stories.map(article=>`<article class="swiper-slide hero-slide" style="background-image:url('${esc(article.image)}')"><a class="hero-content" href="/news/${encodeURIComponent(article.id)}" aria-label="Read ${esc(article.title)}"><h1>${esc(article.title)}</h1></a></article>`).join('');
 }
 function takeUnused(stories,count,used){const selected=[];for(const story of stories){const key=String(story.id||story.slug||story.title);if(used.has(key))continue;used.add(key);selected.push(story);if(selected.length===count)break;}return selected;}
 function home(){
