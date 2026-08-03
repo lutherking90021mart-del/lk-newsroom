@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title description">
+  <title id="title">Craft and colour</title>
+  <desc id="description">A colourful LK Newsroom illustration inspired by woven textiles and contemporary craft.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#003366"/><stop offset="1" stop-color="#075fae"/></linearGradient>
+    <pattern id="weave" width="80" height="80" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 40H80M40 0V80" stroke="#fff" stroke-opacity=".12" stroke-width="11"/></pattern>
+  </defs>
+  <rect width="1200" height="720" fill="url(#sky)"/>
+  <rect width="1200" height="720" fill="url(#weave)"/>
+  <path d="M0 520C155 407 311 641 475 503S790 376 930 495s188-22 270-79v304H0Z" fill="#e31e24"/>
+  <path d="M0 586c167-86 291 58 450-38s333 68 503-29 176 12 247-40v241H0Z" fill="#f3b423"/>
+  <circle cx="296" cy="268" r="130" fill="#fff" fill-opacity=".94"/>
+  <circle cx="296" cy="268" r="91" fill="#e31e24"/>
+  <path d="M270 202h52v42h42v52h-42v42h-52v-42h-42v-52h42z" fill="#fff"/>
+  <text x="500" y="255" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="68" font-weight="800" letter-spacing="3">LK NEWSROOM</text>
+  <text x="505" y="340" fill="#d9edff" font-family="Arial, Helvetica, sans-serif" font-size="40" letter-spacing="5">CRAFT &amp; COLOUR</text>
+</svg>

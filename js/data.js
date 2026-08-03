@@ -23,7 +23,7 @@ export const videos = [
 ];
 export const gallery = [
   {title:'A city in motion',image:'https://images.unsplash.com/photo-1536697246787-1f7ae568d89a?auto=format&fit=crop&w=1000&q=82'},
-  {title:'Craft and colour',image:'https://images.unsplash.com/photo-1605129819171-80b61f2c5b4f?auto=format&fit=crop&w=600&q=82'},
+  {title:'Craft and colour',image:'assets/gallery-craft.svg'},
   {title:'The energy of game day',image:'https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=600&q=82'},
   {title:'A brighter start',image:'https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?auto=format&fit=crop&w=600&q=82'},
   {title:'Built for tomorrow',image:'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=600&q=82'}

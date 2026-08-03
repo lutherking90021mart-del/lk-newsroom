@@ -9,7 +9,7 @@ const categoryUrl=name=>link(`category/${String(name).toLowerCase().replace(/&/g
 export function articleCard(article, compact = false) {
   const href=`/news/${encodeURIComponent(article.id)}`;
   const fallback=link('assets/default-news.svg');
-  return `<article class="news-card" data-aos="fade-up"><a class="news-card__link" href="${href}" aria-label="Read ${esc(article.title)}"><span class="news-card__image"><img src="${esc(article.image||fallback)}" alt="" loading="lazy" onerror="this.src='${fallback}'"></span><span class="news-card__body"><span class="eyebrow">${esc(article.category)}</span><h3 class="headline">${esc(article.title)}</h3>${compact ? '' : `<span class="text-muted card-excerpt">${esc(article.excerpt)}</span>`}<span class="meta">${esc(article.source||'LK Newsroom')} · ${esc(article.time || article.date)} · ${Number(article.reading)||1} min read</span></span></a></article>`;
+  return `<article class="news-card" data-aos="fade-up"><a class="news-card__link" href="${href}" aria-label="Read ${esc(article.title)}"><span class="news-card__image"><img src="${esc(article.image||fallback)}" alt="" loading="lazy" onerror="this.onerror=null;this.src='${fallback}'"></span><span class="news-card__body"><span class="eyebrow">${esc(article.category)}</span><h3 class="headline">${esc(article.title)}</h3>${compact ? '' : `<span class="text-muted card-excerpt">${esc(article.excerpt)}</span>`}<span class="meta">${esc(article.source||'LK Newsroom')} · ${esc(article.time || article.date)} · ${Number(article.reading)||1} min read</span></span></a></article>`;
 }
 
 export function renderHeader(active = '') {
