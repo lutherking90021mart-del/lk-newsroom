@@ -28,10 +28,11 @@ Use `npm.cmd` in PowerShell if Windows blocks `npm.ps1` because of the execution
 2. In SQL Editor, run `supabase/schema.sql` first.
 3. Then run `supabase/live-news.sql`. It creates the live-news source tables, feed/error logs, worker run history, and the database lock used to prevent overlapping jobs.
 4. Run `supabase/admin-cms-upgrade.sql` once. It enables real advertisement impression and click counters.
-5. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
-6. Set only the public Supabase URL and publishable/anon key in `js/config.js`. Never put the service-role key in this browser file.
-7. Create a row for your account in `users_roles` with the `super_admin` role.
-8. Enable Supabase Realtime for `articles`, `comments`, `breaking_news`, and `live_updates`.
+5. Run `supabase/social-media-automation.sql` once if you want automatic social publishing.
+6. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
+7. Set only the public Supabase URL and publishable/anon key in `js/config.js`. Never put the service-role key in this browser file.
+8. Create a row for your account in `users_roles` with the `super_admin` role.
+9. Enable Supabase Realtime for `articles`, `comments`, `breaking_news`, and `live_updates`.
 
 If a service-role key was copied into a screenshot or chat, rotate it in Supabase before deployment.
 
@@ -96,6 +97,66 @@ Choose one scheduler. Do not enable several intentionally; the database lock is 
 - Deploy the web service with `railway.json` and use `npm run start`.
 - Add a second Railway **Cron** service in its dashboard, with schedule `*/5 * * * *` and start command `npm run worker:once`.
 - Give both services the same Supabase variables. Set `ENABLE_NODE_CRON=false` in the web service.
+
+## Social media automation
+
+After `supabase/social-media-automation.sql` has been run, open **Admin → Social Media**. It holds the connection list, queued posts, retry action, errors, and click totals. The 5-minute Railway worker queues and publishes stories created by editors, scheduled stories that become live, and articles imported through RSS or approved APIs. A database lock prevents two worker runs from posting the same story at the same time; the database also has a unique account-and-article constraint.
+
+### Required Railway variables
+
+Add the following to **both** Railway services: `lk-newsroom-web` and `lk-newsroom-worker`. Never add them to `js/config.js`, Supabase public settings, screenshots, or chat.
+
+```text
+PUBLIC_ORIGIN=https://YOUR-RAILWAY-DOMAIN
+SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+SOCIAL_TOKEN_ENCRYPTION_KEY=a-base64-encoded-32-byte-random-value
+```
+
+Generate the encryption value locally with:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Keep this exact value private and stable. Changing it makes already connected OAuth accounts require reconnection.
+
+### Official OAuth connections
+
+Create an app with each platform, add its values to both Railway services, and register the matching callback URL in that app before pressing its **Connect** button in Admin:
+
+```text
+Facebook / Instagram: https://YOUR-RAILWAY-DOMAIN/v1/social/oauth/facebook/callback
+Instagram:            https://YOUR-RAILWAY-DOMAIN/v1/social/oauth/instagram/callback
+Threads:              https://YOUR-RAILWAY-DOMAIN/v1/social/oauth/threads/callback
+X:                    https://YOUR-RAILWAY-DOMAIN/v1/social/oauth/x/callback
+LinkedIn:             https://YOUR-RAILWAY-DOMAIN/v1/social/oauth/linkedin/callback
+```
+
+```text
+META_APP_ID=...
+META_APP_SECRET=...
+THREADS_APP_ID=...
+THREADS_APP_SECRET=...
+X_CLIENT_ID=...
+X_CLIENT_SECRET=...
+LINKEDIN_CLIENT_ID=...
+LINKEDIN_CLIENT_SECRET=...
+```
+
+Facebook and Instagram require a Facebook Page and an Instagram professional account linked to that Page. The connection uses the first Page returned by Meta; use an app account that manages only the intended LK Newsroom Page. X requires an app with user-context OAuth 2.0 permission for `tweet.write`. LinkedIn uses the signed-in member identity; organization posting can be configured as an approved server-token connection when the required organization permission is granted.
+
+### Telegram and platform limits
+
+For Telegram, add `TELEGRAM_BOT_TOKEN` as a Railway variable, then add a **Telegram Channel** connection in Admin. Enter the bot variable name `TELEGRAM_BOT_TOKEN` (not the token itself) and the channel username such as `@LKNewsroom` or the numeric chat ID. Make the bot a channel administrator before enabling auto-posting.
+
+WhatsApp Channels and YouTube Community do not offer a general official API for automatic channel/community publishing, so LK Newsroom deliberately does not automate them. This avoids unsafe browser automation or scraping.
+
+### Publishing rules and images
+
+Every connection can be enabled or paused, filtered to categories, delayed by 0/5/15/60 minutes, and given a custom template using `{headline}`, `{summary}`, `{url}`, `{hashtags}`, and `{breaking}`. Publishing retries failed requests up to five times with increasing delays. Posts cannot be duplicated for the same social account and article.
+
+The publisher uses the article's featured image. If none is present, LK Newsroom creates a branded title card for platforms that can show a linked preview. Instagram's official publishing API requires a public JPG, PNG, or WebP, so add a legitimate raster article image in the editor before retrying an image-less Instagram post.
 
 ### Render
 

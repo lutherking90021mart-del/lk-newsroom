@@ -6,6 +6,9 @@ import {readFile} from 'node:fs/promises';
 import {createClient} from '@supabase/supabase-js';
 import {NewsWorker} from '../worker/newsWorker.js';
 import {findImageCandidates} from '../services/googleImageSearch.js';
+import {brandedSocialCardSvg,socialPlatforms} from '../worker/socialPublisher.js';
+import {beginSocialOAuth,completeSocialOAuth} from '../services/socialOAuth.js';
+import {defaultSocialTemplates,ensureSocialGraphics,listSocialTemplates,previewArticleForTemplate,renderSocialGraphicSvg,type SocialTemplate} from '../services/socialGraphics.js';
 
 const url=process.env.SUPABASE_URL;
 const serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -189,6 +192,100 @@ app.post('/v1/admin/image-search',requireStaff,async(req,res)=>{
   if(!title)return res.status(400).json({error:'Article title is required for image search.'});
   try{res.json({data:await findImageCandidates(title,originalUrl,5)});}
   catch(error){res.status(500).json({error:error instanceof Error?error.message:'Image search failed.'});}
+});
+
+const socialColour=(value:unknown,fallback:string)=>/^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i.test(String(value||''))?String(value):fallback;
+function socialTemplatePayload(body:any){
+  const slug=String(body?.slug||'').trim().toLowerCase().replace(/[^a-z0-9-]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
+  const name=String(body?.name||'').trim().slice(0,80);const categorySlug=String(body?.categorySlug||body?.category_slug||'latest').trim().toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,50)||'latest';
+  const fontFamily=String(body?.fontFamily||body?.font_family||'Arial, Helvetica, sans-serif').replace(/[<>]/g,'').slice(0,120)||'Arial, Helvetica, sans-serif';
+  const backgroundUrl=String(body?.backgroundUrl||body?.background_url||'').trim();
+  if(!slug||!name)throw new Error('Template name and slug are required.');
+  if(backgroundUrl&&!/^https:\/\//i.test(backgroundUrl))throw new Error('Template background must use a public HTTPS image URL.');
+  return {slug,name,category_slug:categorySlug,accent_color:socialColour(body?.accentColor||body?.accent_color,'#E31E24'),background_color:socialColour(body?.backgroundColor||body?.background_color,'#003366'),font_family:fontFamily,background_url:backgroundUrl||null,text_position:typeof body?.textPosition==='object'&&body.textPosition?body.textPosition:{},enabled:body?.enabled!==false,is_default:body?.isDefault!==false};
+}
+
+app.get('/v1/admin/social/templates',requireStaff,async(_req,res)=>{
+  try{res.json({data:await listSocialTemplates(db)});}catch(error){res.status(500).json({error:error instanceof Error?error.message:'Run the social graphics migration first.'});}
+});
+app.post('/v1/admin/social/templates',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const payload=socialTemplatePayload(req.body);const {data,error}=await db.from('social_templates').upsert(payload,{onConflict:'slug'}).select('*').single();if(error)throw error;res.status(201).json({data});}
+  catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to save social template.'});}
+});
+app.patch('/v1/admin/social/templates/:id',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const payload=socialTemplatePayload(req.body);const {data,error}=await db.from('social_templates').update(payload).eq('id',req.params.id).select('*').single();if(error)throw error;res.json({data});}
+  catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to update social template.'});}
+});
+app.post('/v1/admin/social/graphics/:articleId/regenerate',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data:article,error}=await db.from('articles').select('id,slug,title,excerpt,ai_summary,featured_image_url,published_at,breaking,categories(name,slug)').eq('id',req.params.articleId).maybeSingle();if(error)throw error;if(!article)return res.status(404).json({error:'Article not found'});const assets=await ensureSocialGraphics(db,article);if(!assets)return res.status(409).json({error:'Run social-graphics-upgrade.sql first.'});res.json({assets});}
+  catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to generate social graphics.'});}
+});
+app.get('/v1/social/templates/:slug/preview.svg',async(req,res)=>{
+  try{const slug=String(req.params.slug||'');const templates=await listSocialTemplates(db).catch(()=>defaultSocialTemplates());const template=(templates as SocialTemplate[]).find(item=>item.slug===slug)||defaultSocialTemplates()[1];res.set('Cache-Control','public, max-age=300').type('image/svg+xml').send(renderSocialGraphicSvg(previewArticleForTemplate(template),template,'instagram_feed'));}
+  catch{res.status(404).end();}
+});
+
+// Social credentials stay server-side. The admin stores a Railway variable name or uses an OAuth connection,
+// never a raw token in the browser database.
+app.get('/v1/admin/social',requireStaff,async(_req,res)=>{
+  try{
+    const [accounts,posts,logs]=await Promise.all([
+      db.from('social_accounts').select('id,platform,display_name,account_id,credential_key,enabled,auto_post,category_slugs,posting_delay_minutes,post_template,auto_post_from,metadata,token_expires_at,last_success_at,last_error,created_at,updated_at').order('created_at',{ascending:false}),
+      db.from('social_posts').select('id,account_id,article_id,platform,status,scheduled_for,attempts,max_attempts,platform_post_id,platform_post_url,last_error,posted_at,click_count,created_at,social_accounts(display_name),articles(title,slug)').order('created_at',{ascending:false}).limit(100),
+      db.from('social_logs').select('id,platform,level,event,message,created_at,social_accounts(display_name)').order('created_at',{ascending:false}).limit(60)
+    ]);
+    if(accounts.error)throw accounts.error;if(posts.error)throw posts.error;if(logs.error)throw logs.error;
+    const totals=(posts.data||[]).reduce((sum:any,row:any)=>{sum[row.platform]=(sum[row.platform]||0)+1;if(row.status==='published')sum.published++;if(row.status==='failed')sum.failed++;sum.clicks+=Number(row.click_count||0);return sum;},{published:0,failed:0,clicks:0});
+    res.json({accounts:accounts.data||[],posts:posts.data||[],logs:logs.data||[],totals,platforms:socialPlatforms});
+  }catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to load social media data.'});}
+});
+app.post('/v1/admin/social/accounts',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const platform=String(req.body?.platform||'').toLowerCase();const displayName=String(req.body?.displayName||'').trim();const accountId=String(req.body?.accountId||'').trim();const credentialKey=String(req.body?.credentialKey||'').trim();
+    if(!socialPlatforms.includes(platform as any))return res.status(400).json({error:'Choose a supported social platform.'});
+    if(!displayName||!accountId)return res.status(400).json({error:'Account name and account/page/channel ID are required.'});
+    if(!/^[A-Z][A-Z0-9_]{2,128}$/.test(credentialKey))return res.status(400).json({error:'Enter the Railway environment-variable name that holds this account token, for example TELEGRAM_BOT_TOKEN.'});
+    const categorySlugs=Array.isArray(req.body?.categorySlugs)?req.body.categorySlugs.map((value:any)=>String(value).trim().toLowerCase()).filter(Boolean).slice(0,20):[];
+    const delay=[0,5,15,60].includes(Number(req.body?.postingDelayMinutes))?Number(req.body.postingDelayMinutes):0;
+    const template=String(req.body?.postTemplate||'{breaking}{headline}\n\n{summary}\n\nRead more:\n{url}\n\n{hashtags}').slice(0,2000);
+    const {data,error}=await db.from('social_accounts').upsert({platform,display_name:displayName,account_id:accountId,credential_key:credentialKey,enabled:Boolean(req.body?.enabled),auto_post:req.body?.autoPost!==false,category_slugs:categorySlugs,posting_delay_minutes:delay,post_template:template,auto_post_from:new Date().toISOString(),metadata:{connection:'environment-variable'},created_by:userId},{onConflict:'platform,account_id'}).select('id,platform,display_name,account_id,enabled').single();
+    if(error)throw error;res.status(201).json({data});
+  }catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to save social account.'});}
+});
+app.patch('/v1/admin/social/accounts/:id',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const update:any={};if(typeof req.body?.enabled==='boolean')update.enabled=req.body.enabled;if(typeof req.body?.autoPost==='boolean')update.auto_post=req.body.autoPost;
+    if(Array.isArray(req.body?.categorySlugs))update.category_slugs=req.body.categorySlugs.map((value:any)=>String(value).trim().toLowerCase()).filter(Boolean).slice(0,20);
+    if([0,5,15,60].includes(Number(req.body?.postingDelayMinutes)))update.posting_delay_minutes=Number(req.body.postingDelayMinutes);
+    if(typeof req.body?.postTemplate==='string')update.post_template=req.body.postTemplate.slice(0,2000);
+    if(typeof req.body?.credentialKey==='string'&&req.body.credentialKey.trim()){
+      if(!/^[A-Z][A-Z0-9_]{2,128}$/.test(req.body.credentialKey.trim()))return res.status(400).json({error:'Credential key must be an environment-variable name.'});update.credential_key=req.body.credentialKey.trim();
+    }
+    const {data,error}=await db.from('social_accounts').update(update).eq('id',req.params.id).select('id,platform,display_name,enabled,auto_post').single();if(error)throw error;res.json({data});
+  }catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to update social account.'});}
+});
+app.post('/v1/admin/social/posts/:id/retry',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data,error}=await db.from('social_posts').update({status:'pending',attempts:0,next_attempt_at:new Date().toISOString(),last_error:null,locked_at:null}).eq('id',req.params.id).select('id,status').single();if(error)throw error;res.json({data});}
+  catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to retry social post.'});}
+});
+app.post('/v1/admin/social/oauth/:platform',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;const platform=String(req.params.platform);if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});res.json(await beginSocialOAuth(db,platform,userId));}
+  catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to start social connection.'});}
+});
+app.get('/v1/social/oauth/:platform/callback',async(req,res)=>{
+  try{const platform=String(req.params.platform);const state=typeof req.query.state==='string'?req.query.state:'';const code=typeof req.query.code==='string'?req.query.code:'';if(!state||!code)throw new Error('The platform did not return an authorization code.');const connection=await completeSocialOAuth(db,platform,state,code);res.type('html').send(`<!doctype html><title>LK Newsroom connection complete</title><body style="font-family:system-ui;margin:48px;background:#f5f8fb;color:#071b2d"><h1>Connected to ${escHtml(connection.displayName)}</h1><p>${escHtml(connection.platform)} is ready for LK Newsroom auto-posting. You may close this window and return to the Social Media screen.</p></body>`);}
+  catch(error){res.status(400).type('html').send(`<!doctype html><title>Connection failed</title><body style="font-family:system-ui;margin:48px;background:#f5f8fb;color:#071b2d"><h1>Social connection failed</h1><p>${escHtml(error instanceof Error?error.message:'Try again from Admin → Social Media.')}</p></body>`);}
+});
+app.get('/go/social/:postId',async(req,res)=>{
+  const {data,error}=await db.from('social_posts').select('id,article_url').eq('id',req.params.postId).maybeSingle();if(error||!data)return res.redirect(302,'/');
+  const {error:rpcError}=await db.rpc('increment_social_click',{social_post_uuid:data.id});if(rpcError)console.warn('Social click tracking failed:',rpcError.message);
+  res.redirect(302,data.article_url);
+});
+app.get('/v1/social/cards/:identifier.svg',async(req,res)=>{
+  try{const identifier=req.params.identifier.replace(/\.svg$/i,'');const article=await articleByIdentifier(identifier);if(!article)return res.status(404).end();res.set('Cache-Control','public, max-age=3600').type('image/svg+xml').send(brandedSocialCardSvg(article));}
+  catch{res.status(404).end();}
 });
 app.all('/api/news/update',requireCronOrStaff,async(req,res)=>runManualWorker(req,res,'cron'));
 

@@ -1,1 +1,1 @@
-{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"esModuleInterop":true,"skipLibCheck":true,"forceConsistentCasingInFileNames":true,"types":["node"]},"include":["server/**/*.ts","services/**/*.ts","providers/**/*.ts"]}
+{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"esModuleInterop":true,"skipLibCheck":true,"forceConsistentCasingInFileNames":true,"types":["node"]},"include":["server/**/*.ts","services/**/*.ts","providers/**/*.ts","worker/**/*.ts"]}
