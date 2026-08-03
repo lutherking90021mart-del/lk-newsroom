@@ -29,10 +29,11 @@ Use `npm.cmd` in PowerShell if Windows blocks `npm.ps1` because of the execution
 3. Then run `supabase/live-news.sql`. It creates the live-news source tables, feed/error logs, worker run history, and the database lock used to prevent overlapping jobs.
 4. Run `supabase/admin-cms-upgrade.sql` once. It enables real advertisement impression and click counters.
 5. Run `supabase/social-media-automation.sql` once if you want automatic social publishing.
-6. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
-7. Set only the public Supabase URL and publishable/anon key in `js/config.js`. Never put the service-role key in this browser file.
-8. Create a row for your account in `users_roles` with the `super_admin` role.
-9. Enable Supabase Realtime for `articles`, `comments`, `breaking_news`, and `live_updates`.
+6. Run `supabase/category-pages-upgrade.sql` once. It stores the public category descriptions and adds the Ghana desk used by `/category/ghana`.
+7. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
+8. Set only the public Supabase URL and publishable/anon key in `js/config.js`. Never put the service-role key in this browser file.
+9. Create a row for your account in `users_roles` with the `super_admin` role.
+10. Enable Supabase Realtime for `articles`, `comments`, `breaking_news`, and `live_updates`.
 
 If a service-role key was copied into a screenshot or chat, rotate it in Supabase before deployment.
 
@@ -47,6 +48,10 @@ The web server sends `/news/:identifier` to the article shell. The browser then 
 ```
 
 For a real Supabase UUID, the URL has the same form, for example `/news/bf5b5a68-...`. Cards only use the professional `assets/default-news.svg` artwork if the source record has no featured image or that image fails to load.
+
+## Database-driven category pages
+
+Every Explore by Category tile links to a dedicated route such as `/category/ghana` and `/category/sports`. The page requests the category title, description, live-story count, filters, and article pages from Supabase through the server API. Ghana is treated as a geographic desk, so it includes Ghana stories from Politics, Business, Sport, and every other editorial category. All other category pages show articles assigned to that exact category.
 
 ## Live news worker
 
@@ -157,6 +162,24 @@ WhatsApp Channels and YouTube Community do not offer a general official API for 
 Every connection can be enabled or paused, filtered to categories, delayed by 0/5/15/60 minutes, and given a custom template using `{headline}`, `{summary}`, `{url}`, `{hashtags}`, and `{breaking}`. Publishing retries failed requests up to five times with increasing delays. Posts cannot be duplicated for the same social account and article.
 
 The publisher uses the article's featured image. If none is present, LK Newsroom creates a branded title card for platforms that can show a linked preview. Instagram's official publishing API requires a public JPG, PNG, or WebP, so add a legitimate raster article image in the editor before retrying an image-less Instagram post.
+
+## Automatic branded social graphics
+
+Run `supabase/social-graphics-upgrade.sql` after the social-media migration. It creates the `social-graphics` Storage bucket, reusable template settings, and the generated-graphic records. Each worker run creates or refreshes branded graphic assets for recently published stories even when no social account is connected yet.
+
+For every story, LK Newsroom stores six high-resolution vector graphics in Supabase Storage:
+
+```text
+Instagram Feed / WhatsApp Channel  1080 × 1080
+Instagram Story                    1080 × 1920
+Facebook Post                      1200 × 630
+X Post                             1600 × 900
+LinkedIn Post                      1200 × 627
+```
+
+The generator uses the article photo when supplied and otherwise uses the branded LK Newsroom design. It includes the LK logo, date, Breaking/Latest label, headline, summary, `lknewsroom.com`, social marks, and `@lk.news.global`. Category defaults are included for Breaking, Latest, Sports, Politics, Business, Technology, Entertainment, Health, Education, World, Africa, and Ghana.
+
+Open **Admin → Social Templates** (`/admin/socialtemplates.html`) to preview templates, change the category default, font, dark background colour, accent colour, and background image. New published stories use the latest selected template automatically. Use a genuine article photo for image-first platforms such as Instagram.
 
 ### Render
 

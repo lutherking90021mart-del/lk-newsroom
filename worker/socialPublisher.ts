@@ -1,13 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { decryptSocialToken } from '../services/socialCrypto.js';
-import { defaultSocialTemplates, ensureSocialGraphics, graphicUrlForPlatform, renderSocialGraphicSvg, type SocialGraphicArticle, type SocialGraphicAssets } from '../services/socialGraphics.js';
+import { defaultSocialTemplates, ensureSocialGraphics, graphicUrlForPlatform, hasCompleteSocialGraphicAssets, renderSocialGraphicSvg, type SocialGraphicArticle, type SocialGraphicAssets } from '../services/socialGraphics.js';
 
 export const socialPlatforms=['facebook','instagram','threads','x','linkedin','telegram'] as const;
 export type SocialPlatform=typeof socialPlatforms[number];
 type Account={id:string;platform:SocialPlatform;display_name:string;account_id:string;credential_key?:string|null;credentials_encrypted?:string|null;enabled:boolean;auto_post:boolean;category_slugs?:string[];posting_delay_minutes:number;post_template:string;auto_post_from:string;created_at?:string;metadata?:Record<string,unknown>;last_success_at?:string|null;};
 type Article=SocialGraphicArticle & {created_at?:string|null;country?:string|null;auto_tags?:string[]|null;};
 type SocialPost={id:string;account_id:string;article_id:string;platform:SocialPlatform;post_text:string;article_url:string;image_url?:string|null;attempts:number;max_attempts:number;next_attempt_at?:string|null;social_accounts:Account;articles:Article;};
-export type SocialRunResult={status:'completed'|'skipped'|'unavailable';queued:number;published:number;retried:number;failed:number;activatedScheduled:number;errors:number;};
+export type SocialRunResult={status:'completed'|'skipped'|'unavailable';queued:number;published:number;retried:number;failed:number;activatedScheduled:number;graphicsGenerated:number;errors:number;};
 
 const text=(value:unknown)=>String(value??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
 const cleanTag=(value:string)=>value.replace(/[^\p{L}\p{N}]/gu,'');
@@ -104,12 +104,13 @@ async function publish(account:Account,post:SocialPost){
 export class SocialPublisher {
   constructor(private db:SupabaseClient){}
   async run():Promise<SocialRunResult>{
-    const empty={status:'completed' as const,queued:0,published:0,retried:0,failed:0,activatedScheduled:0,errors:0};
+    const empty={status:'completed' as const,queued:0,published:0,retried:0,failed:0,activatedScheduled:0,graphicsGenerated:0,errors:0};
     const {data:locked,error:lockError}=await this.db.rpc('acquire_news_worker_lock',{p_lock_name:'social-publishing',lease_seconds:270});
     if(lockError){if(/social_(accounts|posts)|relation.*does not exist/i.test(lockError.message||''))return {...empty,status:'unavailable' as const};throw lockError;}
     if(!locked)return {...empty,status:'skipped' as const};
     try{
       empty.activatedScheduled=await this.activateScheduledArticles();
+      empty.graphicsGenerated=await this.generateRecentGraphics();
       empty.queued=await this.queueEligibleArticles();
       const outcome=await this.publishDuePosts();Object.assign(empty,outcome);
       return empty;
@@ -120,6 +121,14 @@ export class SocialPublisher {
   }
   private async activateScheduledArticles(){
     const now=new Date().toISOString();const {data,error}=await this.db.from('articles').update({status:'published',published_at:now}).eq('status','scheduled').lte('scheduled_at',now).select('id');if(error)throw error;return data?.length||0;
+  }
+  private async generateRecentGraphics(){
+    const {data:articles,error:articleError}=await this.db.from('articles').select('id,slug,title,excerpt,ai_summary,featured_image_url,breaking,published_at,created_at,categories(name,slug)').eq('status','published').order('updated_at',{ascending:false}).limit(80);if(articleError)throw articleError;
+    const ids=(articles||[]).map((article:any)=>article.id);if(!ids.length)return 0;
+    const {data:stored,error:storedError}=await this.db.from('social_graphics').select('article_id,source_image_url,assets').in('article_id',ids);if(storedError){if(/social_graphics|relation.*does not exist|PGRST205/i.test(storedError.message||''))return 0;throw storedError;}
+    const storedByArticle=new Map((stored||[]).map((row:any)=>[row.article_id,row]));let generated=0;
+    for(const article of articles as Article[]){const current=storedByArticle.get(article.id);if(current&&hasCompleteSocialGraphicAssets(current.assets)&&String(current.source_image_url||'')===String(article.featured_image_url||''))continue;const assets=await ensureSocialGraphics(this.db,article);if(assets)generated++;}
+    return generated;
   }
   private async queueEligibleArticles(){
     const [{data:accounts,error:accountError},{data:articles,error:articleError}]=await Promise.all([
@@ -132,7 +141,7 @@ export class SocialPublisher {
       const started=new Date(account.auto_post_from||account.created_at||0).getTime();const published=new Date(article.published_at||0).getTime();const created=new Date(article.created_at||0).getTime();
       if(Math.max(published,created)<started)continue;
       const allowed=account.category_slugs||[];if(allowed.length&&(!article.categories?.slug||!allowed.includes(article.categories.slug)))continue;
-      const scheduledFor=new Date(Math.max(now,published||now)+Number(account.posting_delay_minutes||0)*60_000).toISOString();const graphics=await graphicsFor(article);const generatedGraphic=graphicUrlForPlatform(graphics,account.platform);
+      const scheduledFor=new Date(Math.max(now,published||now)+Number(account.posting_delay_minutes||0)*60_000).toISOString();const graphics=await graphicsFor(article);const generatedGraphic=graphicUrlForPlatform(graphics||undefined,account.platform);
       const {error}=await this.db.from('social_posts').upsert({account_id:account.id,article_id:article.id,platform:account.platform,status:account.posting_delay_minutes?'scheduled':'pending',post_text:postText(article,account),article_url:articleUrl(article),image_url:generatedGraphic||imageUrl(article),scheduled_for:scheduledFor},{onConflict:'account_id,article_id',ignoreDuplicates:true});
       if(error)throw error;queued++;
     }

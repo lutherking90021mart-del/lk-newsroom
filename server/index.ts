@@ -20,6 +20,7 @@ app.set('trust proxy',1);
 const publicArticleFields='id,slug,title,excerpt,ai_summary,featured_image_url,original_url,published_at,created_at,country,auto_tags,view_count,categories(name,slug),news_sources(name,slug),authors(name)';
 const detailArticleFields='*,categories(name,slug),news_sources(name,slug),authors(name),article_tags(tags(name,slug))';
 const isUuid=(value:string)=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const normaliseCategorySlug=(value:unknown)=>String(value??'').trim().toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,60);
 
 app.use(cors({origin:process.env.PUBLIC_ORIGIN?.split(',')||true}));
 app.use(express.json({limit:'100kb'}));
@@ -56,6 +57,17 @@ async function articleByIdentifier(identifier:string){
   if(error)throw error;
   return data;
 }
+async function categoryBySlug(slug:string){
+  const {data,error}=await db.from('categories').select('id,name,slug,description,colour').eq('slug',slug).maybeSingle();
+  if(error)throw error;
+  return data;
+}
+function scopeCategoryArticles(query:any,slug:string,category:{id:string}|null){
+  // Ghana is a geographic desk. It deliberately includes every Ghana story, regardless of whether
+  // its editorial category is politics, sport, business, and so on.
+  if(slug==='ghana')return category?query.or(`category_id.eq.${category.id},country.eq.Ghana`):query.eq('country','Ghana');
+  return category?query.eq('category_id',category.id):null;
+}
 function nextFiveMinutes(){return new Date((Math.floor(Date.now()/300_000)+1)*300_000).toISOString();}
 const escHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!));
 const escXml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
@@ -76,14 +88,36 @@ app.get('/health',async(_req,res)=>{
   res.json({status:'ok',service:'lk-news-aggregator',updatedAt:new Date().toISOString(),worker:data||null});
 });
 
+app.get('/v1/categories/:slug',async(req,res)=>{
+  try{
+    const slug=normaliseCategorySlug(req.params.slug);
+    if(!slug)return res.status(400).json({error:'A valid category is required.'});
+    const category=await categoryBySlug(slug);
+    if(!category)return res.status(404).json({error:'Category not found.'});
+    const base=db.from('articles').select('id',{count:'exact',head:true}).eq('status','published').is('duplicate_of',null);
+    const query=scopeCategoryArticles(base,slug,category);
+    if(!query)return res.json({data:category,liveStories:0,updatedAt:new Date().toISOString()});
+    const {count,error}=await query;
+    if(error)throw error;
+    res.json({data:category,liveStories:count||0,updatedAt:new Date().toISOString()});
+  }catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to load category.'});}
+});
+
 app.get('/v1/news',async(req,res)=>{
   // Offset pagination keeps every section useful as the newsroom grows beyond its first stories.
   const limit=Math.min(Math.max(Number(req.query.limit)||30,1),48);
   const offset=Math.min(Math.max(Number(req.query.offset)||0,0),4_800);
   const view=typeof req.query.view==='string'?req.query.view:'latest';
   const sortByViews=view==='trending'||view==='most-read';
-  let query=db.from('articles').select(publicArticleFields,{count:'exact'}).eq('status','published').eq('is_aggregated',true).is('duplicate_of',null).order(sortByViews?'view_count':'published_at',{ascending:false}).order('published_at',{ascending:false});
-  if(typeof req.query.category==='string')query=query.eq('categories.slug',req.query.category);
+  let query=db.from('articles').select(publicArticleFields,{count:'exact'}).eq('status','published').is('duplicate_of',null).order(sortByViews?'view_count':'published_at',{ascending:false}).order('published_at',{ascending:false});
+  if(typeof req.query.category==='string'){
+    const slug=normaliseCategorySlug(req.query.category);
+    if(!slug)return res.status(400).json({error:'A valid category is required.'});
+    const category=await categoryBySlug(slug);
+    const scoped=scopeCategoryArticles(query,slug,category);
+    if(!scoped)return res.json({data:[],total:0,offset,limit,updatedAt:new Date().toISOString()});
+    query=scoped;
+  }
   if(typeof req.query.country==='string')query=query.eq('country',req.query.country);
   if(typeof req.query.author==='string')query=query.ilike('authors.name',`%${req.query.author.slice(0,80)}%`);
   if(typeof req.query.q==='string')query=query.ilike('title',`%${req.query.q.slice(0,80)}%`);
@@ -217,7 +251,7 @@ app.patch('/v1/admin/social/templates/:id',requireStaff,async(req,res)=>{
   catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to update social template.'});}
 });
 app.post('/v1/admin/social/graphics/:articleId/regenerate',requireStaff,async(req,res)=>{
-  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data:article,error}=await db.from('articles').select('id,slug,title,excerpt,ai_summary,featured_image_url,published_at,breaking,categories(name,slug)').eq('id',req.params.articleId).maybeSingle();if(error)throw error;if(!article)return res.status(404).json({error:'Article not found'});const assets=await ensureSocialGraphics(db,article);if(!assets)return res.status(409).json({error:'Run social-graphics-upgrade.sql first.'});res.json({assets});}
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data:article,error}=await db.from('articles').select('id,slug,title,excerpt,ai_summary,featured_image_url,published_at,breaking,categories(name,slug)').eq('id',req.params.articleId).maybeSingle();if(error)throw error;if(!article)return res.status(404).json({error:'Article not found'});const graphicsArticle={...article,categories:Array.isArray(article.categories)?article.categories[0]||null:article.categories};const assets=await ensureSocialGraphics(db,graphicsArticle);if(!assets)return res.status(409).json({error:'Run social-graphics-upgrade.sql first.'});res.json({assets});}
   catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to generate social graphics.'});}
 });
 app.get('/v1/social/templates/:slug/preview.svg',async(req,res)=>{
