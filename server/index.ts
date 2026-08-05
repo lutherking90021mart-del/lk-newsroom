@@ -73,6 +73,38 @@ const escHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':
 const escXml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
 function publicOrigin(req:Request){return (process.env.PUBLIC_ORIGIN?.split(',')[0]||`${req.protocol}://${req.get('host')}`).replace(/\/$/,'');}
 function plainText(value:unknown){return String(value??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();}
+const analyticsRateLimit=new Map<string,{count:number;resetAt:number}>();
+const analyticsEventNames=new Set(['page_view','article_open','scroll_depth','page_exit','social_share','ad_impression','ad_click']);
+const revenueSources=new Set(['adsense','direct_advertisements','sponsored_articles','affiliate_marketing','subscriptions','other']);
+const revenueTypes=new Set(['estimated','received','adjustment','refund']);
+const revenueStatuses=new Set(['pending','confirmed','paid','void']);
+function analyticsRateAllowed(req:Request){
+  const key=req.ip||req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()||'unknown';const now=Date.now();const item=analyticsRateLimit.get(key);
+  if(!item||item.resetAt<now){analyticsRateLimit.set(key,{count:1,resetAt:now+60_000});return true;}
+  if(item.count>=90)return false;item.count++;return true;
+}
+function cleanAnalyticsText(value:unknown,max=180){return typeof value==='string'?value.replace(/[\u0000-\u001f]/g,' ').trim().slice(0,max):null;}
+function analyticsPath(value:unknown){
+  const raw=cleanAnalyticsText(value,600)||'/';
+  try{const parsed=new URL(raw,'http://lk.local');return `${parsed.pathname}${parsed.search}`.slice(0,500)||'/';}catch{return '/';}
+}
+function firstHeader(value:string|string[]|undefined){return Array.isArray(value)?value[0]:value?.split(',')[0]?.trim()||null;}
+function requestCountry(req:Request){return cleanAnalyticsText(firstHeader(req.headers['cf-ipcountry'])||firstHeader(req.headers['x-vercel-ip-country'])||firstHeader(req.headers['x-geo-country']),80);}
+function requestCity(req:Request){return cleanAnalyticsText(firstHeader(req.headers['cf-ipcity'])||firstHeader(req.headers['x-vercel-ip-city'])||firstHeader(req.headers['x-geo-city']),100);}
+function dayStart(input=new Date()){const copy=new Date(input);copy.setUTCHours(0,0,0,0);return copy;}
+function dateKey(value:Date|string){return new Date(value).toISOString().slice(0,10);}
+function bucket<T extends Record<string,any>>(rows:T[],field:keyof T,unknown='Unknown'){
+  return Object.entries(rows.reduce((result:Record<string,number>,row)=>{const key=String(row[field]||unknown).trim()||unknown;result[key]=(result[key]||0)+1;return result;},{})).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([label,value])=>({label,value}));
+}
+function sumAmounts(rows:any[]){return rows.reduce((sum,row)=>sum+Number(row.amount||0),0);}
+function currencySummary(rows:any[]){
+  const values=rows.reduce((result:Record<string,number>,row)=>{const currency=String(row.currency||'USD').toUpperCase();result[currency]=(result[currency]||0)+Number(row.amount||0);return result;},{});
+  return Object.entries(values).map(([currency,amount])=>({currency,amount:Number(amount.toFixed(2))}));
+}
+async function optionalAnalyticsUser(req:Request){
+  const token=req.headers.authorization?.replace(/^Bearer\s+/i,'');if(!token)return null;
+  const {data:{user}}=await db.auth.getUser(token);return user?.id||null;
+}
 async function articleDocument(req:Request,article:Record<string,any>){
   const origin=publicOrigin(req);const canonical=`${origin}/news/${encodeURIComponent(article.slug||article.id)}`;
   const title=article.meta_title||article.title||'LK Newsroom';const description=(article.meta_description||article.ai_summary||article.excerpt||plainText(article.content)||'LK Newsroom reporting.').slice(0,300);
@@ -86,6 +118,114 @@ async function articleDocument(req:Request,article:Record<string,any>){
 app.get('/health',async(_req,res)=>{
   const {data}=await db.from('worker_runs').select('status,completed_at,started_at').order('started_at',{ascending:false}).limit(1).maybeSingle();
   res.json({status:'ok',service:'lk-news-aggregator',updatedAt:new Date().toISOString(),worker:data||null});
+});
+
+// First-party browser telemetry. This endpoint intentionally stores an anonymous browser ID,
+// never an IP address, email address, or advertising fingerprint. Railway/Cloudflare geo headers
+// are used only when the host already provides them.
+app.post('/v1/analytics/events',async(req,res)=>{
+  try{
+    if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many analytics events. Please try again shortly.'});
+    const eventName=cleanAnalyticsText(req.body?.eventName,40)||'';
+    const sessionId=cleanAnalyticsText(req.body?.sessionId,120)||'';
+    const visitorId=cleanAnalyticsText(req.body?.visitorId,120);
+    if(!analyticsEventNames.has(eventName)||!sessionId)return res.status(400).json({error:'A valid analytics event and session are required.'});
+    const articleId=typeof req.body?.articleId==='string'&&isUuid(req.body.articleId)?req.body.articleId:null;
+    const categoryId=typeof req.body?.categoryId==='string'&&isUuid(req.body.categoryId)?req.body.categoryId:null;
+    const scrollDepth=Number(req.body?.scrollDepth);const durationSeconds=Number(req.body?.durationSeconds);
+    const source=cleanAnalyticsText(req.body?.source,160)||'direct';
+    const metadata=typeof req.body?.metadata==='object'&&req.body.metadata&&!Array.isArray(req.body.metadata)?req.body.metadata:{};
+    const userId=await optionalAnalyticsUser(req);
+    const {error}=await db.from('analytics_events').insert({
+      user_id:userId,visitor_id:visitorId,session_id:sessionId,event_name:eventName,page_url:analyticsPath(req.body?.pageUrl),
+      page_title:cleanAnalyticsText(req.body?.pageTitle,180),article_id:articleId,category_id:categoryId,
+      country:requestCountry(req),city:requestCity(req),device:cleanAnalyticsText(req.body?.device,40),browser:cleanAnalyticsText(req.body?.browser,50),
+      operating_system:cleanAnalyticsText(req.body?.operatingSystem,60),source,search_keyword:cleanAnalyticsText(req.body?.searchKeyword,140),
+      scroll_depth:Number.isFinite(scrollDepth)?Math.min(100,Math.max(0,Math.round(scrollDepth))):null,
+      duration_seconds:Number.isFinite(durationSeconds)?Math.min(86_400,Math.max(0,Math.round(durationSeconds))):null,
+      metadata
+    });
+    if(error)throw error;
+    res.status(202).json({ok:true});
+  }catch(error){res.status(503).json({error:error instanceof Error?error.message:'Analytics is temporarily unavailable. Run analytics-business-upgrade.sql in Supabase first.'});}
+});
+
+app.post('/v1/analytics/advertisements/:id/:event',async(req,res)=>{
+  try{
+    if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many advertising events.'});
+    if(!isUuid(req.params.id)||!['impression','click'].includes(req.params.event))return res.status(400).json({error:'Invalid advertising event.'});
+    const {error}=await db.from('advertisement_events').insert({advertisement_id:req.params.id,event_type:req.params.event,session_id:cleanAnalyticsText(req.body?.sessionId,120),page_url:analyticsPath(req.body?.pageUrl),source:cleanAnalyticsText(req.body?.source,160)||'direct'});
+    if(error)throw error;res.status(202).json({ok:true});
+  }catch(error){res.status(503).json({error:error instanceof Error?error.message:'Advertising analytics is temporarily unavailable.'});}
+});
+
+app.get('/v1/admin/analytics/overview',requireStaff,async(req,res)=>{
+  try{
+    const requested=Number(req.query.days);const days=Number.isFinite(requested)?Math.min(90,Math.max(1,Math.round(requested))):30;
+    const now=new Date();const from=new Date(now.getTime()-(days-1)*86_400_000);from.setUTCHours(0,0,0,0);
+    const today=dayStart(now);const week=new Date(today.getTime()-6*86_400_000);const month=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1));const year=new Date(Date.UTC(now.getUTCFullYear(),0,1));
+    const [eventsResult,articlesResult,commentsResult,likesResult,socialPostsResult,socialAccountsResult,revenueResult,adEventsResult,adsResult,subscribersResult,categoriesResult]=await Promise.all([
+      db.from('analytics_events').select('visitor_id,session_id,event_name,page_url,page_title,article_id,category_id,country,city,device,browser,operating_system,source,search_keyword,scroll_depth,duration_seconds,created_at').gte('created_at',from.toISOString()).order('created_at',{ascending:false}).limit(50_000),
+      db.from('articles').select('id,slug,title,featured_image_url,view_count,published_at,created_at,categories(name,slug),authors(name)').eq('status','published').is('duplicate_of',null).order('published_at',{ascending:false}).limit(500),
+      db.from('comments').select('article_id,created_at').eq('status','approved').gte('created_at',from.toISOString()).limit(20_000),
+      db.from('article_likes').select('article_id,created_at').gte('created_at',from.toISOString()).limit(20_000),
+      db.from('social_posts').select('id,article_id,platform,status,posted_at,scheduled_for,click_count,created_at,platform_post_url,social_accounts(display_name)').gte('created_at',from.toISOString()).order('created_at',{ascending:false}).limit(10_000),
+      db.from('social_accounts').select('id,platform,display_name,enabled,auto_post,last_success_at,last_error,token_expires_at').order('created_at',{ascending:false}),
+      db.from('revenue').select('id,source,amount,currency,type,status,date,advertisement_id,article_id,notes,created_at').gte('date',year.toISOString().slice(0,10)).order('date',{ascending:false}).limit(10_000),
+      db.from('advertisement_events').select('advertisement_id,event_type,created_at').gte('created_at',from.toISOString()).limit(50_000),
+      db.from('advertisements').select('id,title,name,ad_type,impressions,clicks,status,active,advertisers(company_name)').order('created_at',{ascending:false}).limit(500),
+      db.from('newsletter').select('id,created_at',{count:'exact',head:true}),
+      db.from('categories').select('id,name,slug')
+    ]);
+    const required=[eventsResult,revenueResult,adEventsResult];const failed=required.find(item=>item.error);
+    if(failed?.error)throw failed.error;
+    const otherError=[articlesResult,commentsResult,likesResult,socialPostsResult,socialAccountsResult,adsResult,categoriesResult].find(item=>item.error)?.error;
+    if(otherError)throw otherError;
+    const events=(eventsResult.data||[]) as any[];const articles=(articlesResult.data||[]) as any[];const comments=(commentsResult.data||[]) as any[];const likes=(likesResult.data||[]) as any[];const socialPosts=(socialPostsResult.data||[]) as any[];const socialAccounts=(socialAccountsResult.data||[]) as any[];const revenueRows=(revenueResult.data||[]) as any[];const adEvents=(adEventsResult.data||[]) as any[];const ads=(adsResult.data||[]) as any[];
+    const pageEvents=events.filter(row=>row.event_name==='page_view');const articleEvents=events.filter(row=>row.event_name==='article_open');const visitors=new Set(pageEvents.map(row=>row.visitor_id).filter(Boolean));const sessions=new Set(events.map(row=>row.session_id).filter(Boolean));const online=new Set(events.filter(row=>new Date(row.created_at).getTime()>now.getTime()-300_000).map(row=>row.session_id).filter(Boolean));
+    const sessionRows=new Map<string,any[]>();for(const event of events){if(!event.session_id)continue;const list=sessionRows.get(event.session_id)||[];list.push(event);sessionRows.set(event.session_id,list);}
+    const returnVisitors=[...sessionRows.values()].filter(rows=>new Set(rows.map(row=>row.page_url)).size>1||rows.length>2).length;
+    const sessionDurations=[...sessionRows.values()].map(rows=>{const timestamps=rows.map(row=>new Date(row.created_at).getTime()).filter(Number.isFinite);const observed=Math.max(0,((Math.max(...timestamps)-Math.min(...timestamps))/1000)||0);const reported=Math.max(0,...rows.map(row=>Number(row.duration_seconds)||0));return Math.max(observed,reported);}).filter(value=>value>0);
+    const averageSessionDuration=sessionDurations.length?Math.round(sessionDurations.reduce((sum,value)=>sum+value,0)/sessionDurations.length):0;
+    const dayBuckets=new Map<string,{visitors:Set<string>;views:number;sessions:Set<string>}>();for(let index=days-1;index>=0;index--){const day=new Date(today.getTime()-index*86_400_000);dayBuckets.set(dateKey(day),{visitors:new Set(),views:0,sessions:new Set()});}
+    for(const event of pageEvents){const group=dayBuckets.get(dateKey(event.created_at));if(group){group.views++;if(event.visitor_id)group.visitors.add(event.visitor_id);if(event.session_id)group.sessions.add(event.session_id);}}
+    const articleCounts=new Map<string,{opens:number;shares:number;readings:number[];scrolls:number[]}>();for(const event of events){if(!event.article_id)continue;const metrics=articleCounts.get(event.article_id)||{opens:0,shares:0,readings:[],scrolls:[]};if(event.event_name==='article_open')metrics.opens++;if(event.event_name==='social_share')metrics.shares++;if(event.event_name==='page_exit'&&Number(event.duration_seconds)>0)metrics.readings.push(Number(event.duration_seconds));if(event.event_name==='scroll_depth'&&Number(event.scroll_depth)>0)metrics.scrolls.push(Number(event.scroll_depth));articleCounts.set(event.article_id,metrics);}
+    const commentCounts=new Map<string,number>();comments.forEach(row=>commentCounts.set(row.article_id,(commentCounts.get(row.article_id)||0)+1));const likeCounts=new Map<string,number>();likes.forEach(row=>likeCounts.set(row.article_id,(likeCounts.get(row.article_id)||0)+1));
+    const performances=articles.map(article=>{const tracked=articleCounts.get(article.id)||{opens:0,shares:0,readings:[],scrolls:[]};const views=Math.max(Number(article.view_count||0),tracked.opens);const commentsForArticle=commentCounts.get(article.id)||0;const likesForArticle=likeCounts.get(article.id)||0;const averageReadingTime=tracked.readings.length?Math.round(tracked.readings.reduce((sum,value)=>sum+value,0)/tracked.readings.length):0;const engagementRate=views?Number((((tracked.shares+commentsForArticle+likesForArticle)/views)*100).toFixed(1)):0;const scrollAverage=tracked.scrolls.length?tracked.scrolls.reduce((sum,value)=>sum+value,0)/tracked.scrolls.length:0;const score=Math.min(100,Math.round(Math.min(35,views/4)+Math.min(30,tracked.shares*5)+Math.min(20,commentsForArticle*4)+Math.min(10,likesForArticle*2)+Math.min(5,scrollAverage/20)));return {id:article.id,slug:article.slug,title:article.title,image:article.featured_image_url,category:article.categories?.name||'News',author:article.authors?.name||'LK Newsroom',publishedAt:article.published_at||article.created_at,views,shares:tracked.shares,comments:commentsForArticle,likes:likesForArticle,averageReadingTime,engagementRate,score};}).sort((a,b)=>b.score-a.score||b.views-a.views).slice(0,25);
+    const paidRevenue=revenueRows.filter(row=>row.status!=='void');const byPeriod=(start:Date)=>paidRevenue.filter(row=>new Date(`${row.date}T00:00:00Z`)>=start);const monthlyRevenue=new Map<string,number>();for(const row of paidRevenue){const key=String(row.date).slice(0,7);monthlyRevenue.set(key,(monthlyRevenue.get(key)||0)+Number(row.amount||0));}
+    const socialToday=socialPosts.filter(row=>row.posted_at&&new Date(row.posted_at)>=today);const publishedPosts=socialPosts.filter(row=>row.status==='published');const socialPlatform=bucket(publishedPosts,'platform');const adImpressions=adEvents.filter(row=>row.event_type==='impression').length;const adClicks=adEvents.filter(row=>row.event_type==='click').length;
+    const topCategories=performances.reduce((result:Record<string,number>,article)=>{result[article.category]=(result[article.category]||0)+article.views;return result;},{});
+    res.json({
+      period:{days,from:from.toISOString(),to:now.toISOString()},
+      visitors:{today:[...new Set(pageEvents.filter(row=>new Date(row.created_at)>=today).map(row=>row.visitor_id).filter(Boolean))].length,week:[...new Set(pageEvents.filter(row=>new Date(row.created_at)>=week).map(row=>row.visitor_id).filter(Boolean))].length,month:[...new Set(pageEvents.filter(row=>new Date(row.created_at)>=month).map(row=>row.visitor_id).filter(Boolean))].length,total:visitors.size,live:online.size,pageViews:pageEvents.length,sessions:sessions.size,returningRate:visitors.size?Number(((returnVisitors/visitors.size)*100).toFixed(1)):0,averageSessionDuration,growth:[...dayBuckets.entries()].map(([date,value])=>({date,visitors:value.visitors.size,pageViews:value.views,sessions:value.sessions.size})),countries:bucket(pageEvents,'country'),cities:bucket(pageEvents,'city'),devices:bucket(pageEvents,'device'),browsers:bucket(pageEvents,'browser'),operatingSystems:bucket(pageEvents,'operating_system'),sources:bucket(pageEvents,'source'),keywords:bucket(pageEvents.filter(row=>row.search_keyword),'search_keyword'),pages:bucket(pageEvents,'page_url')},
+      articles:{published:articles.length,performance:performances,mostViewed:[...performances].sort((a,b)=>b.views-a.views).slice(0,10),mostShared:[...performances].sort((a,b)=>b.shares-a.shares).slice(0,10),mostCommented:[...performances].sort((a,b)=>b.comments-a.comments).slice(0,10),trendingToday:performances.filter(row=>new Date(row.publishedAt)>=today).slice(0,10),categories:Object.entries(topCategories).sort((a:any,b:any)=>b[1]-a[1]).slice(0,8).map(([label,value])=>({label,value}))},
+      revenue:{today:sumAmounts(byPeriod(today)),week:sumAmounts(byPeriod(week)),month:sumAmounts(byPeriod(month)),year:sumAmounts(byPeriod(year)),currencyTotals:currencySummary(paidRevenue),sources:bucket(paidRevenue,'source'),monthly:[...monthlyRevenue.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([monthName,amount])=>({month:monthName,amount:Number(amount.toFixed(2))})),records:paidRevenue.slice(0,50),advertising:{impressions:adImpressions||ads.reduce((sum,row)=>sum+Number(row.impressions||0),0),clicks:adClicks||ads.reduce((sum,row)=>sum+Number(row.clicks||0),0),ctr:Number(((((adClicks||ads.reduce((sum,row)=>sum+Number(row.clicks||0),0))/Math.max(1,adImpressions||ads.reduce((sum,row)=>sum+Number(row.impressions||0),0)))*100)).toFixed(2)),campaigns:ads.slice(0,10)}},
+      social:{accounts:socialAccounts,connected:socialAccounts.filter(row=>row.enabled).length,postsToday:socialToday.length,published:publishedPosts.length,failed:socialPosts.filter(row=>row.status==='failed').length,queue:socialPosts.filter(row=>['pending','scheduled','retry','processing'].includes(row.status)).length,clicks:socialPosts.reduce((sum,row)=>sum+Number(row.click_count||0),0),topPlatform:socialPlatform[0]?.label||null,platforms:socialPlatform,lastPost:publishedPosts[0]||null,recent:socialPosts.slice(0,20)},
+      overview:{articlesPublishedToday:articles.filter(row=>new Date(row.published_at||row.created_at)>=today).length,subscribers:subscribersResult.count||0,articleViews:performances.reduce((sum,row)=>sum+row.views,0),socialFollowers:null,revenueToday:sumAmounts(byPeriod(today))}
+    });
+  }catch(error){res.status(503).json({error:error instanceof Error?error.message:'Analytics dashboard unavailable. Run analytics-business-upgrade.sql in Supabase first.'});}
+});
+
+function revenuePayload(body:any,userId:string){
+  const source=String(body?.source||'').trim();const amount=Number(body?.amount);const currency=String(body?.currency||'USD').trim().toUpperCase();const type=String(body?.type||'estimated').trim();const status=String(body?.status||'pending').trim();const date=String(body?.date||new Date().toISOString().slice(0,10)).slice(0,10);
+  if(!revenueSources.has(source)||!Number.isFinite(amount)||Math.abs(amount)>10_000_000||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!revenueTypes.has(type)||!revenueStatuses.has(status)||!/^[A-Z]{3}$/.test(currency))throw new Error('Enter a valid revenue source, amount, currency, date, type, and status.');
+  return {source,amount,currency,type,status,date,advertisement_id:typeof body?.advertisementId==='string'&&isUuid(body.advertisementId)?body.advertisementId:null,article_id:typeof body?.articleId==='string'&&isUuid(body.articleId)?body.articleId:null,notes:cleanAnalyticsText(body?.notes,1000),created_by:userId};
+}
+app.get('/v1/admin/revenue',requireStaff,async(_req,res)=>{
+  try{const {data,error}=await db.from('revenue').select('*,advertisements(title,name),articles(title,slug)').order('date',{ascending:false}).limit(200);if(error)throw error;res.json({data:data||[]});}
+  catch(error){res.status(503).json({error:error instanceof Error?error.message:'Run analytics-business-upgrade.sql in Supabase first.'});}
+});
+app.post('/v1/admin/revenue',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data,error}=await db.from('revenue').insert(revenuePayload(req.body,userId)).select().single();if(error)throw error;res.status(201).json({data});}
+  catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to create revenue record.'});}
+});
+app.patch('/v1/admin/revenue/:id',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;const recordId=String(req.params.id);if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(recordId))return res.status(400).json({error:'Invalid revenue record.'});const {created_by,...payload}=revenuePayload(req.body,userId);const {data,error}=await db.from('revenue').update(payload).eq('id',recordId).select().single();if(error)throw error;res.json({data});}
+  catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to update revenue record.'});}
+});
+app.delete('/v1/admin/revenue/:id',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;const recordId=String(req.params.id);if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(recordId))return res.status(400).json({error:'Invalid revenue record.'});const {error}=await db.from('revenue').delete().eq('id',recordId);if(error)throw error;res.status(204).end();}
+  catch(error){res.status(400).json({error:error instanceof Error?error.message:'Unable to remove revenue record.'});}
 });
 
 app.get('/v1/categories/:slug',async(req,res)=>{

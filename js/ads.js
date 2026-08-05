@@ -1,4 +1,5 @@
 import { configured, supabase } from './supabase-client.js';
+import { analyticsSessionId } from './analytics.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
@@ -47,6 +48,11 @@ function markEvent(ad, event) {
   if (!supabase || !ad?.id) return;
   const fn = event === 'click' ? 'record_ad_click' : 'record_ad_impression';
   void supabase.rpc(fn, { ad_uuid: ad.id });
+  const base = String(window.LK_AGGREGATOR_API_URL || location.origin).replace(/\/$/, '');
+  void fetch(`${base}/v1/analytics/advertisements/${encodeURIComponent(ad.id)}/${event}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+    body: JSON.stringify({ sessionId: analyticsSessionId(), pageUrl: `${location.pathname}${location.search}`, source: document.referrer || 'direct' })
+  });
 }
 
 function directCreative(ad) {
