@@ -26,6 +26,11 @@ app.use(cors({origin:process.env.PUBLIC_ORIGIN?.split(',')||true}));
 app.use(express.json({limit:'100kb'}));
 
 interface StaffRequest extends Request { userId?:string; }
+function errorMessage(error:unknown,fallback:string){
+  if(error instanceof Error)return error.message;
+  if(error&&typeof error==='object'&&'message' in error&&typeof (error as {message?:unknown}).message==='string')return (error as {message:string}).message;
+  return fallback;
+}
 async function requireStaff(req:StaffRequest,res:Response,next:NextFunction){
   const token=req.headers.authorization?.replace(/^Bearer\s+/i,'');
   if(!token)return res.status(401).json({error:'Authentication required'});
@@ -179,8 +184,9 @@ app.get('/v1/admin/analytics/overview',requireStaff,async(req,res)=>{
     ]);
     const required=[eventsResult,revenueResult,adEventsResult];const failed=required.find(item=>item.error);
     if(failed?.error)throw failed.error;
-    const otherError=[articlesResult,commentsResult,likesResult,socialPostsResult,socialAccountsResult,adsResult,categoriesResult].find(item=>item.error)?.error;
-    if(otherError)throw otherError;
+    // Supporting modules (social, ads and historic article metadata) should never
+    // take the whole newsroom dashboard offline. Their data is optional here and
+    // each affected card simply starts empty until that module is configured.
     const events=(eventsResult.data||[]) as any[];const articles=(articlesResult.data||[]) as any[];const comments=(commentsResult.data||[]) as any[];const likes=(likesResult.data||[]) as any[];const socialPosts=(socialPostsResult.data||[]) as any[];const socialAccounts=(socialAccountsResult.data||[]) as any[];const revenueRows=(revenueResult.data||[]) as any[];const adEvents=(adEventsResult.data||[]) as any[];const ads=(adsResult.data||[]) as any[];
     const pageEvents=events.filter(row=>row.event_name==='page_view');const articleEvents=events.filter(row=>row.event_name==='article_open');const visitors=new Set(pageEvents.map(row=>row.visitor_id).filter(Boolean));const sessions=new Set(events.map(row=>row.session_id).filter(Boolean));const online=new Set(events.filter(row=>new Date(row.created_at).getTime()>now.getTime()-300_000).map(row=>row.session_id).filter(Boolean));
     const sessionRows=new Map<string,any[]>();for(const event of events){if(!event.session_id)continue;const list=sessionRows.get(event.session_id)||[];list.push(event);sessionRows.set(event.session_id,list);}
@@ -203,7 +209,7 @@ app.get('/v1/admin/analytics/overview',requireStaff,async(req,res)=>{
       social:{accounts:socialAccounts,connected:socialAccounts.filter(row=>row.enabled).length,postsToday:socialToday.length,published:publishedPosts.length,failed:socialPosts.filter(row=>row.status==='failed').length,queue:socialPosts.filter(row=>['pending','scheduled','retry','processing'].includes(row.status)).length,clicks:socialPosts.reduce((sum,row)=>sum+Number(row.click_count||0),0),topPlatform:socialPlatform[0]?.label||null,platforms:socialPlatform,lastPost:publishedPosts[0]||null,recent:socialPosts.slice(0,20)},
       overview:{articlesPublishedToday:articles.filter(row=>new Date(row.published_at||row.created_at)>=today).length,subscribers:subscribersResult.count||0,articleViews:performances.reduce((sum,row)=>sum+row.views,0),socialFollowers:null,revenueToday:sumAmounts(byPeriod(today))}
     });
-  }catch(error){res.status(503).json({error:error instanceof Error?error.message:'Analytics dashboard unavailable. Run analytics-business-upgrade.sql in Supabase first.'});}
+  }catch(error){res.status(503).json({error:errorMessage(error,'Analytics dashboard unavailable. Run analytics-business-upgrade.sql in Supabase first.')});}
 });
 
 function revenuePayload(body:any,userId:string){
