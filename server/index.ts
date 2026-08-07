@@ -3,6 +3,7 @@ import express,{type NextFunction,type Request,type Response} from 'express';
 import cors from 'cors';
 import cron from 'node-cron';
 import {readFile} from 'node:fs/promises';
+import {createHmac,randomUUID,timingSafeEqual} from 'node:crypto';
 import {createClient} from '@supabase/supabase-js';
 import {NewsWorker} from '../worker/newsWorker.js';
 import {findImageCandidates} from '../services/googleImageSearch.js';
@@ -17,13 +18,15 @@ const db=createClient(url,serviceKey,{auth:{persistSession:false}});
 const worker=new NewsWorker(db);
 const app=express();
 app.set('trust proxy',1);
-const publicArticleFields='id,slug,title,excerpt,ai_summary,featured_image_url,original_url,published_at,created_at,country,auto_tags,view_count,categories(name,slug),news_sources(name,slug),authors(name)';
-const detailArticleFields='*,categories(name,slug),news_sources(name,slug),authors(name),article_tags(tags(name,slug))';
-const isUuid=(value:string)=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const publicArticleFields='id,slug,title,excerpt,ai_summary,featured_image_url,original_url,published_at,created_at,country,auto_tags,view_count,categories(name,slug),news_sources(name,slug),authors(name),sponsored_article_details(sponsor_name,sponsor_logo_url,sponsor_url)';
+const detailArticleFields='*,categories(name,slug),news_sources(name,slug),authors(name),article_tags(tags(name,slug)),sponsored_article_details(sponsor_name,sponsor_logo_url,sponsor_url,campaign_details)';
+const isUuid=(value:unknown)=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value));
 const normaliseCategorySlug=(value:unknown)=>String(value??'').trim().toLowerCase().replace(/[^a-z0-9-]/g,'').slice(0,60);
 
 app.use(cors({origin:process.env.PUBLIC_ORIGIN?.split(',')||true}));
-app.use(express.json({limit:'100kb'}));
+// Keep the raw request body only for payment-provider signature verification.
+// Normal application code continues to receive the parsed JSON body.
+app.use(express.json({limit:'100kb',verify:(req,_res,buffer)=>{(req as Request & {rawBody?:Buffer}).rawBody=Buffer.from(buffer);}}));
 
 interface StaffRequest extends Request { userId?:string; }
 function errorMessage(error:unknown,fallback:string){
@@ -80,7 +83,7 @@ function publicOrigin(req:Request){return (process.env.PUBLIC_ORIGIN?.split(',')
 function plainText(value:unknown){return String(value??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();}
 const analyticsRateLimit=new Map<string,{count:number;resetAt:number}>();
 const analyticsEventNames=new Set(['page_view','article_open','scroll_depth','page_exit','social_share','ad_impression','ad_click']);
-const revenueSources=new Set(['adsense','direct_advertisements','sponsored_articles','affiliate_marketing','subscriptions','other']);
+const revenueSources=new Set(['adsense','direct_advertisements','sponsored_articles','affiliate_marketing','subscriptions','donations','other']);
 const revenueTypes=new Set(['estimated','received','adjustment','refund']);
 const revenueStatuses=new Set(['pending','confirmed','paid','void']);
 function analyticsRateAllowed(req:Request){
@@ -467,6 +470,124 @@ app.get('/v1/social/cards/:identifier.svg',async(req,res)=>{
   try{const identifier=req.params.identifier.replace(/\.svg$/i,'');const article=await articleByIdentifier(identifier);if(!article)return res.status(404).end();res.set('Cache-Control','public, max-age=3600').type('image/svg+xml').send(brandedSocialCardSvg(article));}
   catch{res.status(404).end();}
 });
+
+// Monetisation: public advertising, reader support and payment hand-off.
+// Provider secrets only ever live in Railway variables. The browser receives a checkout URL, never a secret.
+const moneyCurrencies=new Set(['GHS','USD','GBP','EUR','NGN','ZAR']);
+const paymentProviders=new Set(['paystack','stripe']);
+function safeEmail(value:unknown){const email=String(value||'').trim().toLowerCase();return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)?email:null;}
+function safeMoney(value:unknown,min=1,max=10_000_000){const amount=Number(value);return Number.isFinite(amount)&&amount>=min&&amount<=max?Number(amount.toFixed(2)):null;}
+function safeCurrency(value:unknown){const currency=String(value||'GHS').trim().toUpperCase();return moneyCurrencies.has(currency)?currency:null;}
+function safeText(value:unknown,max=1000){return String(value||'').replace(/[\u0000-\u001f]/g,' ').trim().slice(0,max);}
+function paymentReference(){return `LK-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0,8).toUpperCase()}`;}
+function paymentReturnUrl(req:Request,reference:string){return `${publicOrigin(req)}/pages/support.html?payment=${encodeURIComponent(reference)}`;}
+async function markPayment(reference:string,status:'paid'|'failed'|'cancelled'|'refunded',providerResponse:Record<string,unknown>={}){
+  const {data:transaction,error}=await db.from('payment_transactions').select('*').eq('reference',reference).maybeSingle();
+  if(error||!transaction)return;
+  // A provider can deliver a successful webhook more than once. Only the first
+  // successful transition may create a revenue row.
+  const newlyPaid=status==='paid'&&transaction.status!=='paid';
+  await db.from('payment_transactions').update({status,provider_response:providerResponse}).eq('id',transaction.id);
+  if(transaction.kind==='donation'&&transaction.donation_id){
+    await db.from('donations').update({status:status==='paid'?'paid':status==='refunded'?'refunded':'failed'}).eq('id',transaction.donation_id);
+    if(newlyPaid)await db.from('revenue').insert({source:'donations',amount:transaction.amount,currency:transaction.currency,type:'received',status:'paid',date:new Date().toISOString().slice(0,10),donation_id:transaction.donation_id,notes:`Donation ${reference}`});
+  }
+  if(transaction.kind==='subscription'&&transaction.subscription_id){
+    await db.from('subscriptions').update({status:status==='paid'?'active':status==='cancelled'?'cancelled':status==='refunded'?'cancelled':'failed',start_date:status==='paid'?new Date().toISOString():null}).eq('id',transaction.subscription_id);
+    if(newlyPaid)await db.from('revenue').insert({source:'subscriptions',amount:transaction.amount,currency:transaction.currency,type:'received',status:'paid',date:new Date().toISOString().slice(0,10),notes:`Membership ${reference}`});
+  }
+}
+function providerSignatureMatches(secret:string,raw:Buffer,signature:string,algorithm:'sha256'|'sha512'='sha512'){
+  if(!signature)return false;const expected=createHmac(algorithm,secret).update(raw).digest('hex');
+  try{return timingSafeEqual(Buffer.from(expected),Buffer.from(signature));}catch{return false;}
+}
+function stripeSignatureMatches(secret:string,raw:Buffer,header:string){
+  const chunks=header.split(',').map(item=>item.trim().split('='));const timestamp=chunks.find(([key])=>key==='t')?.[1];const received=chunks.find(([key])=>key==='v1')?.[1];
+  if(!timestamp||!received||Math.abs(Date.now()/1000-Number(timestamp))>300)return false;
+  return providerSignatureMatches(secret,Buffer.from(`${timestamp}.${raw.toString('utf8')}`),received,'sha256');
+}
+app.get('/v1/monetization/packages',async(_req,res)=>{
+  try{const [packages,plans]=await Promise.all([
+    db.from('advertising_packages').select('id,title,slug,description,placement,price,currency,duration_days,features').eq('active',true).order('sort_order'),
+    db.from('membership_plans').select('id,name,slug,description,features,amount,currency,interval').eq('active',true).order('sort_order')
+  ]);if(packages.error)throw packages.error;if(plans.error)throw plans.error;res.json({packages:packages.data||[],plans:plans.data||[]});}
+  catch(error){res.status(503).json({error:errorMessage(error,'Monetisation is temporarily unavailable. Run monetization-suite-upgrade.sql in Supabase first.')});}
+});
+app.post('/v1/monetization/advertiser-requests',async(req,res)=>{
+  try{
+    if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many requests. Please try again shortly.'});
+    const companyName=safeText(req.body?.companyName,160),email=safeEmail(req.body?.email),contactName=safeText(req.body?.contactName,100),phone=safeText(req.body?.phone,60),website=safeText(req.body?.website,300),message=safeText(req.body?.message,3000);
+    const type=safeText(req.body?.advertisementType,60)||'display',placement=safeText(req.body?.placement,80)||null,currency=safeCurrency(req.body?.currency)||'GHS',duration=Number(req.body?.durationDays),budget=safeMoney(req.body?.budget,0,10_000_000);
+    const packageId=typeof req.body?.packageId==='string'&&isUuid(req.body.packageId)?req.body.packageId:null;
+    if(companyName.length<2||!email)return res.status(400).json({error:'Enter a company name and valid email address.'});
+    if(website&&!/^https?:\/\//i.test(website))return res.status(400).json({error:'Website must begin with https:// or http://.'});
+    const {data,error}=await db.from('advertiser_requests').insert({company_name:companyName,contact_name:contactName||null,email,phone:phone||null,website:website||null,package_id:packageId,advertisement_type:type,requested_placement:placement,budget,currency,campaign_duration_days:Number.isInteger(duration)&&duration>=1&&duration<=366?duration:null,campaign_goal:safeText(req.body?.goal,600)||null,message:message||null}).select('id').single();
+    if(error)throw error;res.status(201).json({data});
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to submit your advertising request.')});}
+});
+app.post('/v1/monetization/checkout',async(req,res)=>{
+  try{
+    if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many payment requests. Please try again shortly.'});
+    const kind=req.body?.kind==='subscription'?'subscription':req.body?.kind==='donation'?'donation':null;
+    const provider=String(req.body?.provider||'paystack').toLowerCase();const email=safeEmail(req.body?.email);const currency=safeCurrency(req.body?.currency)||'GHS';
+    if(!kind||!paymentProviders.has(provider)||!email)return res.status(400).json({error:'Choose a payment type, provider, and valid email address.'});
+    let amount=safeMoney(req.body?.amount),plan:any=null;
+    if(kind==='subscription'){
+      if(!isUuid(String(req.body?.planId||'')))return res.status(400).json({error:'Choose a membership plan.'});
+      const result=await db.from('membership_plans').select('*').eq('id',req.body.planId).eq('active',true).maybeSingle();if(result.error)throw result.error;plan=result.data;if(!plan)return res.status(404).json({error:'That membership plan is no longer available.'});amount=Number(plan.amount);}
+    if(!amount)return res.status(400).json({error:'Enter a valid amount.'});
+    const reference=paymentReference();let donationId:string|null=null,subscriptionId:string|null=null;
+    if(kind==='donation'){
+      const saved=await db.from('donations').insert({donor_name:safeText(req.body?.name,120)||null,donor_email:email,amount,currency,provider,provider_reference:reference,message:safeText(req.body?.message,500)||null}).select('id').single();if(saved.error)throw saved.error;donationId=saved.data.id;
+    }else{
+      const saved=await db.from('subscriptions').insert({plan_id:plan.id,plan:plan.name,provider,provider_reference:reference,amount,currency,status:'pending'}).select('id').single();if(saved.error)throw saved.error;subscriptionId=saved.data.id;
+    }
+    const saved=await db.from('payment_transactions').insert({kind,provider,reference,email,amount,currency,donation_id:donationId,subscription_id:subscriptionId}).select('id').single();if(saved.error)throw saved.error;
+    let checkoutUrl:string|undefined;
+    if(provider==='paystack'){
+      const key=process.env.PAYSTACK_SECRET_KEY;if(!key)throw new Error('Paystack is not configured. Add PAYSTACK_SECRET_KEY in Railway.');
+      const response=await fetch('https://api.paystack.co/transaction/initialize',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({email,amount:Math.round(amount*100),currency,reference,callback_url:paymentReturnUrl(req,reference),metadata:{kind,subscriptionId,donationId}})});
+      const payload=await response.json() as any;if(!response.ok||!payload.status)throw new Error(payload.message||'Paystack could not start checkout.');checkoutUrl=payload.data?.authorization_url;
+    }else{
+      const key=process.env.STRIPE_SECRET_KEY;if(!key)throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY in Railway.');
+      if(kind==='subscription'&&!plan.stripe_price_id)throw new Error('This membership plan needs a Stripe Price ID before it can be purchased with Stripe.');
+      const form=new URLSearchParams({success_url:`${paymentReturnUrl(req,reference)}&success=1`,cancel_url:`${paymentReturnUrl(req,reference)}&cancelled=1`,client_reference_id:reference,'metadata[reference]':reference});
+      if(kind==='subscription'){form.set('mode','subscription');form.set('line_items[0][price]',plan.stripe_price_id);form.set('line_items[0][quantity]','1');}
+      else {form.set('mode','payment');form.set('line_items[0][price_data][currency]',currency.toLowerCase());form.set('line_items[0][price_data][product_data][name]','Support LK Newsroom');form.set('line_items[0][price_data][unit_amount]',String(Math.round(amount*100)));form.set('line_items[0][quantity]','1');}
+      const response=await fetch('https://api.stripe.com/v1/checkout/sessions',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/x-www-form-urlencoded'},body:form});const payload=await response.json() as any;if(!response.ok)throw new Error(payload.error?.message||'Stripe could not start checkout.');checkoutUrl=payload.url;
+    }
+    if(!checkoutUrl)throw new Error('The payment provider did not return a checkout link.');await db.from('payment_transactions').update({provider_response:{checkout_url:checkoutUrl}}).eq('id',saved.data.id);res.status(201).json({reference,checkoutUrl});
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to start secure checkout.')});}
+});
+app.get('/v1/monetization/payments/:reference',async(req,res)=>{
+  const {data,error}=await db.from('payment_transactions').select('reference,kind,status,amount,currency,created_at').eq('reference',String(req.params.reference)).maybeSingle();
+  if(error)return res.status(500).json({error:error.message});if(!data)return res.status(404).json({error:'Payment not found.'});res.json({data});
+});
+app.post('/v1/monetization/paystack/webhook',async(req,res)=>{
+  const secret=process.env.PAYSTACK_SECRET_KEY,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
+  if(!secret||!providerSignatureMatches(secret,raw,String(req.headers['x-paystack-signature']||'')))return res.status(401).json({error:'Invalid payment signature.'});
+  const event=req.body||{};if(event.event==='charge.success'&&event.data?.reference)await markPayment(String(event.data.reference),'paid',{event:event.event,reference:event.data.reference});res.sendStatus(200);
+});
+app.post('/v1/monetization/stripe/webhook',async(req,res)=>{
+  const secret=process.env.STRIPE_WEBHOOK_SECRET,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
+  if(!secret||!stripeSignatureMatches(secret,raw,String(req.headers['stripe-signature']||'')))return res.status(401).json({error:'Invalid payment signature.'});
+  const event=req.body||{};const reference=event.data?.object?.client_reference_id||event.data?.object?.metadata?.reference;if(['checkout.session.completed','invoice.paid'].includes(event.type)&&reference)await markPayment(String(reference),'paid',{event:event.type,providerId:event.data?.object?.id});res.sendStatus(200);
+});
+app.get('/go/affiliate/:code',async(req,res)=>{
+  const code=safeText(req.params.code,100);const {data,error}=await db.from('affiliate_links').select('id,destination_url,active').eq('tracking_code',code).maybeSingle();
+  if(error||!data||!data.active)return res.redirect(302,'/');void db.from('affiliate_events').insert({affiliate_link_id:data.id,event_type:'click',session_id:cleanAnalyticsText(req.query.sessionId,120)});res.redirect(302,data.destination_url);
+});
+app.get('/v1/admin/monetization/overview',requireStaff,async(_req,res)=>{
+  try{
+    const [packages,requests,details,campaigns,links,plans,subscriptions,donations,transactions]=await Promise.all([
+      db.from('advertising_packages').select('*').order('sort_order'),db.from('advertiser_requests').select('*,advertising_packages(title),advertisers(company_name)').order('created_at',{ascending:false}).limit(300),db.from('sponsored_article_details').select('*,articles(title,slug,view_count)').order('created_at',{ascending:false}).limit(200),db.from('affiliate_campaigns').select('*').order('created_at',{ascending:false}),db.from('affiliate_links').select('*,affiliate_campaigns(name)').order('created_at',{ascending:false}),db.from('membership_plans').select('*').order('sort_order'),db.from('subscriptions').select('*,membership_plans(name)').order('created_at',{ascending:false}).limit(200),db.from('donations').select('*').order('created_at',{ascending:false}).limit(200),db.from('payment_transactions').select('*').order('created_at',{ascending:false}).limit(200)
+    ]);const all=[packages,requests,details,campaigns,links,plans,subscriptions,donations,transactions];const failure=all.find(item=>item.error);if(failure?.error)throw failure.error;res.json({packages:packages.data||[],requests:requests.data||[],sponsored:details.data||[],affiliateCampaigns:campaigns.data||[],affiliateLinks:links.data||[],plans:plans.data||[],subscriptions:subscriptions.data||[],donations:donations.data||[],transactions:transactions.data||[]});
+  }catch(error){res.status(503).json({error:errorMessage(error,'Run monetization-suite-upgrade.sql in Supabase first.')});}
+});
+app.patch('/v1/admin/monetization/requests/:id',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid request.'});const status=String(req.body?.status||'');if(!['pending','quoted','approved','rejected','converted'].includes(status))return res.status(400).json({error:'Invalid request status.'});const quote=req.body?.quotedPrice===null||req.body?.quotedPrice===''?null:safeMoney(req.body?.quotedPrice,0);const {data,error}=await db.from('advertiser_requests').update({status,quoted_price:quote,admin_notes:safeText(req.body?.adminNotes,2000)||null,reviewed_by:userId,reviewed_at:new Date().toISOString()}).eq('id',req.params.id).select().single();if(error)throw error;res.json({data});}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to update advertiser request.')});}
+});
 app.all('/api/news/update',requireCronOrStaff,async(req,res)=>runManualWorker(req,res,'cron'));
 
 app.get('/robots.txt',(req,res)=>res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /admin/\nSitemap: ${publicOrigin(req)}/sitemap.xml\n`));
@@ -474,7 +595,7 @@ app.get('/sitemap.xml',async(req,res)=>{
   try{
     const origin=publicOrigin(req);const {data,error}=await db.from('articles').select('slug,id,updated_at,published_at').eq('status','published').is('duplicate_of',null).order('published_at',{ascending:false}).limit(5000);
     if(error)throw error;
-    const staticPaths=['/','/category/ghana','/category/politics','/category/business','/category/technology','/category/entertainment','/category/sports','/category/health','/category/education','/category/africa','/category/world','/category/opinion','/pages/about.html','/pages/contact.html','/pages/privacy.html','/pages/terms.html'];
+    const staticPaths=['/','/category/ghana','/category/politics','/category/business','/category/technology','/category/entertainment','/category/sports','/category/health','/category/education','/category/africa','/category/world','/category/opinion','/pages/about.html','/pages/contact.html','/pages/privacy.html','/pages/terms.html','/pages/advertise.html','/pages/support.html'];
     const urls=[...staticPaths.map(path=>`<url><loc>${escXml(`${origin}${path}`)}</loc></url>`),...(data||[]).map(article=>`<url><loc>${escXml(`${origin}/news/${encodeURIComponent(article.slug||article.id)}`)}</loc><lastmod>${new Date(article.updated_at||article.published_at).toISOString()}</lastmod></url>`)].join('');
     res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`);
   }catch(error){res.status(500).type('text/plain').send(error instanceof Error?error.message:'Unable to build sitemap');}

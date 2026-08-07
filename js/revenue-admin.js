@@ -5,7 +5,7 @@ const $ = (selector, parent = document) => parent.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
 const iso = value => value ? new Date(value).toISOString() : null;
 const local = value => value ? new Date(new Date(value).getTime() - new Date(value).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '';
-const placementOptions = ['header-banner','homepage-hero','homepage-sidebar','article-inline','article-sidebar','footer-banner','sticky-bottom','popup-ad','sponsored-news','video-ad'];
+const placementOptions = ['header-banner','homepage-hero','homepage-middle','homepage-sidebar','article-inline','article-sidebar','category-page','footer-banner','sticky-bottom','popup-ad','sponsored-news','video-ad'];
 
 function formatNumber(value) { return Number(value || 0).toLocaleString(); }
 function ctr(ad) { return Number(ad.impressions || 0) ? ((Number(ad.clicks || 0) / Number(ad.impressions)) * 100).toFixed(2) : '0.00'; }

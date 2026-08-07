@@ -205,6 +205,26 @@ After it is applied, open **Admin → Ads** to create campaigns for header, hero
 
 The public site records first-party page events for the live Analytics screen using a random browser ID stored locally; it does not collect IP addresses. Country is based only on a browser regional setting when the browser provides one. Article pages now include canonical URLs, Open Graph and Twitter card metadata, JSON-LD `NewsArticle` data, plus `/sitemap.xml` and `/robots.txt`.
 
+## Complete monetization suite
+
+Run `supabase/monetization-suite-upgrade.sql` after the earlier Supabase migrations. It creates the advertising packages, advertiser requests, sponsored-story disclosures, affiliate campaigns and links, membership plans, donations, subscriptions, payment records, indexes, Row Level Security rules, and live update tables.
+
+After deployment, use these areas:
+
+- **Admin → Ads** for direct banner campaigns, scheduled placements, AdSense slots, and measured impressions/clicks.
+- **Admin → Monetization** for public advertising packages, advertiser request review, sponsored story disclosure, affiliate links, reader membership plans, donations, and payment activity.
+- **Advertise with LK Newsroom** (`/pages/advertise.html`) for companies to send their campaign request.
+- **Support LK Newsroom** (`/pages/support.html`) for memberships and one-time reader donations.
+
+For payments, add only server-side Railway variables: `PAYSTACK_SECRET_KEY`, `STRIPE_SECRET_KEY`, and (for Stripe events) `STRIPE_WEBHOOK_SECRET`. Configure the provider webhooks to call:
+
+```text
+https://YOUR-DOMAIN/v1/monetization/paystack/webhook
+https://YOUR-DOMAIN/v1/monetization/stripe/webhook
+```
+
+Never enter payment secrets in a public page or in the admin browser. Before accepting real payments, complete the provider account verification, test using their test mode, and verify each successful test produces one payment record and one revenue record in Admin → Monetization.
+
 ## Football coverage
 
 The Sports section includes the official BBC Sport Football RSS feed and a separate **News API Football** source. Put your real `NEWS_API_KEY` in `.env`, restart the server, then open **Admin → News Sources**, enable **News API Football**, and press **Sync**. The query can be adjusted with `NEWS_API_SPORTS_QUERY` in `.env`.

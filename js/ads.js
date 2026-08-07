@@ -31,7 +31,7 @@ function campaignIsLive(ad) {
 
 async function fetchCampaigns() {
   if (!configured || !supabase) return [];
-  const modern = 'id,name,title,description,placement,image_url,target_url,html_content,ad_type,adsense_slot,popup_delay_seconds,display_frequency,status,active,starts_at,ends_at,impressions,clicks,advertisers(company_name)';
+  const modern = 'id,name,title,description,placement,image_url,target_url,html_content,ad_type,adsense_slot,popup_delay_seconds,display_frequency,status,active,starts_at,ends_at,impressions,clicks,mobile_sticky,advertisers(company_name)';
   let response = await supabase.from('advertisements').select(modern).order('created_at', { ascending: false });
   if (response.error) response = await supabase.from('advertisements').select('id,name,placement,image_url,target_url,html_content,active,starts_at,ends_at,impressions,clicks').order('created_at', { ascending: false });
   if (response.error) { console.warn('Advertisements unavailable:', response.error.message); return []; }
@@ -98,11 +98,18 @@ function createOptionalSlots(campaigns) {
   const header = $('.site-header'); const main = $('main'); const footer = $('footer');
   if (has('header-banner')) appendPlacement(header, 'header-banner', 'afterend');
   if (has('homepage-hero') && document.body.dataset.template === 'home') appendPlacement(main, 'homepage-hero', 'afterbegin');
+  if (has('homepage-middle') && document.body.dataset.template === 'home') appendPlacement($('#latest-news')?.parentElement, 'homepage-middle', 'beforebegin');
   if (has('footer-banner')) appendPlacement(footer, 'footer-banner', 'beforebegin');
   if (has('sponsored-news')) appendPlacement($('#featured-articles')?.parentElement, 'sponsored-news');
   if (has('video-ad')) appendPlacement($('#videos')?.parentElement, 'video-ad');
-  if (has('article-inline')) appendPlacement($('.article-body') || $('article'), 'article-inline');
-  if (has('sticky-bottom')) { const slot = appendPlacement(document.body, 'sticky-bottom'); if (slot) slot.classList.add('ad-slot--sticky'); }
+  if (has('category-page') && document.body.dataset.template === 'category') appendPlacement($('#category-news')?.parentElement, 'category-page');
+  if (has('article-inline')) {
+    const body = $('.article-body') || $('article');
+    const paragraphs = body?.querySelectorAll('p') || [];
+    const slot = document.createElement('div'); slot.className = 'ad-slot ad-slot--article-inline'; slot.dataset.adPlacement = 'article-inline';
+    if (paragraphs.length > 2) paragraphs[2].insertAdjacentElement('afterend', slot); else appendPlacement(body, 'article-inline');
+  }
+  if (has('sticky-bottom') || campaigns.some(ad => ad.mobile_sticky)) { const slot = appendPlacement(document.body, 'sticky-bottom'); if (slot) slot.classList.add('ad-slot--sticky'); }
 }
 
 function maybePopup(campaigns, clientId) {
@@ -127,7 +134,7 @@ export async function hydrateAdSlots() {
   createOptionalSlots(campaigns);
   const clientId = await publicSetting('google_adsense_id');
   document.querySelectorAll('[data-ad-placement]').forEach(slot => {
-    const candidate = campaigns.find(ad => ad.placement === slot.dataset.adPlacement);
+    const candidate = campaigns.find(ad => ad.placement === slot.dataset.adPlacement) || (slot.dataset.adPlacement === 'sticky-bottom' ? campaigns.find(ad => ad.mobile_sticky) : null);
     if (candidate) renderCampaign(slot, candidate, clientId);
   });
   maybePopup(campaigns, clientId);
