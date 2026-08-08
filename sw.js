@@ -1,0 +1,2 @@
+self.addEventListener('push',event=>{let data={title:'LK Newsroom',message:'A new update is available.',url:'/'};try{data={...data,...event.data.json()};}catch{}event.waitUntil(self.registration.showNotification(data.title,{body:data.message,icon:'/assets/lk-newsroom-logo.png',badge:'/assets/lk-newsroom-logo.png',data:{url:data.url||'/'},tag:data.tag||'lk-newsroom'}));});
+self.addEventListener('notificationclick',event=>{event.notification.close();event.waitUntil(clients.openWindow(event.notification.data?.url||'/'));});

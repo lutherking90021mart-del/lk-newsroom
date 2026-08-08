@@ -3,6 +3,33 @@
 -- analytics-business-upgrade.sql and social-media-automation.sql.
 -- This migration is additive: it preserves all existing advertisements and revenue.
 
+-- Some LK Newsroom installations were created before the first advertiser upgrade.
+-- Keep this migration self-contained so it works on those projects too.
+create table if not exists public.advertisers (
+  id uuid primary key default gen_random_uuid(),
+  company_name text not null,
+  contact_name text,
+  email text,
+  phone text,
+  website text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.advertisements add column if not exists advertiser_id uuid references public.advertisers(id) on delete set null;
+alter table public.advertisements add column if not exists title text;
+alter table public.advertisements add column if not exists description text;
+alter table public.advertisements add column if not exists ad_type text not null default 'direct' check (ad_type in ('direct','adsense','sponsored'));
+alter table public.advertisements add column if not exists adsense_slot text;
+alter table public.advertisements add column if not exists popup_delay_seconds integer not null default 8 check (popup_delay_seconds between 0 and 120);
+alter table public.advertisements add column if not exists display_frequency text not null default 'session' check (display_frequency in ('always','session','day'));
+alter table public.advertisements add column if not exists status text not null default 'active' check (status in ('draft','active','paused','expired'));
+
+update public.advertisements
+set title=coalesce(nullif(title,''),name),
+    status=case when active then 'active' else 'paused' end
+where title is null or title='' or status is null;
+
 create table if not exists public.advertising_packages (
   id uuid primary key default gen_random_uuid(),
   title text not null,

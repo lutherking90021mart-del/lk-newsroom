@@ -10,12 +10,15 @@ import {findImageCandidates} from '../services/googleImageSearch.js';
 import {brandedSocialCardSvg,socialPlatforms} from '../worker/socialPublisher.js';
 import {beginSocialOAuth,completeSocialOAuth} from '../services/socialOAuth.js';
 import {defaultSocialTemplates,ensureSocialGraphics,listSocialTemplates,previewArticleForTemplate,renderSocialGraphicSvg,type SocialTemplate} from '../services/socialGraphics.js';
+import {NotificationWorker} from '../worker/notificationWorker.js';
+import {webPushPublicKey} from '../services/webPush.js';
 
 const url=process.env.SUPABASE_URL;
 const serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
 if(!url||!serviceKey)throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required on the server.');
 const db=createClient(url,serviceKey,{auth:{persistSession:false}});
 const worker=new NewsWorker(db);
+const notificationWorker=new NotificationWorker(db);
 const app=express();
 app.set('trust proxy',1);
 const publicArticleFields='id,slug,title,excerpt,ai_summary,featured_image_url,original_url,published_at,created_at,country,auto_tags,view_count,categories(name,slug),news_sources(name,slug),authors(name),sponsored_article_details(sponsor_name,sponsor_logo_url,sponsor_url)';
@@ -42,6 +45,13 @@ async function requireStaff(req:StaffRequest,res:Response,next:NextFunction){
   const {data:role}=await db.from('users_roles').select('role').eq('user_id',user.id).maybeSingle();
   if(!role)return res.status(403).json({error:'Newsroom role required'});
   req.userId=user.id; next();
+}
+async function requireUser(req:StaffRequest,res:Response,next:NextFunction){
+  const token=req.headers.authorization?.replace(/^Bearer\s+/i,'');
+  if(!token)return res.status(401).json({error:'Sign in to manage personal notifications.'});
+  const {data:{user},error}=await db.auth.getUser(token);
+  if(error||!user)return res.status(401).json({error:'Invalid session'});
+  req.userId=user.id;next();
 }
 function isCronRequest(req:Request){
   const secret=process.env.CRON_SECRET;
@@ -86,6 +96,15 @@ const analyticsEventNames=new Set(['page_view','article_open','scroll_depth','pa
 const revenueSources=new Set(['adsense','direct_advertisements','sponsored_articles','affiliate_marketing','subscriptions','donations','other']);
 const revenueTypes=new Set(['estimated','received','adjustment','refund']);
 const revenueStatuses=new Set(['pending','confirmed','paid','void']);
+const notificationPreferenceKeys=new Set(['breaking_news','daily_brief','morning_summary','ghana','politics','business','technology','sports','entertainment','health','world','africa','comment_replies','supporter_updates','email_enabled','push_enabled','sms_enabled']);
+const notificationTypes=new Set(['breaking','daily_brief','category','supporter','manual','system']);
+const notificationChannels=new Set(['push','email','sms']);
+function notificationPreferences(value:unknown,current:Record<string,unknown>={}){
+  const next:{[key:string]:boolean}={...current} as {[key:string]:boolean};
+  if(value&&typeof value==='object'&&!Array.isArray(value))for(const [key,item] of Object.entries(value as Record<string,unknown>))if(notificationPreferenceKeys.has(key))next[key]=item===true||String(item).toLowerCase()==='true';
+  if(next.email_enabled===undefined)next.email_enabled=true;if(next.daily_brief===undefined)next.daily_brief=true;if(next.morning_summary===undefined)next.morning_summary=true;if(next.breaking_news===undefined)next.breaking_news=true;
+  return next;
+}
 function analyticsRateAllowed(req:Request){
   const key=req.ip||req.headers['x-forwarded-for']?.toString().split(',')[0]?.trim()||'unknown';const now=Date.now();const item=analyticsRateLimit.get(key);
   if(!item||item.resetAt<now){analyticsRateLimit.set(key,{count:1,resetAt:now+60_000});return true;}
@@ -317,9 +336,11 @@ app.post('/v1/news/:identifier/comments',async(req,res)=>{
     const article=await articleByIdentifier(req.params.identifier);
     const displayName=typeof req.body?.displayName==='string'?req.body.displayName.trim():'';
     const body=typeof req.body?.body==='string'?req.body.body.trim():'';
+    const userId=await optionalAnalyticsUser(req);
+    const parentId=typeof req.body?.parentId==='string'&&isUuid(req.body.parentId)?req.body.parentId:null;
     if(!article)return res.status(404).json({error:'Article not found'});
     if(displayName.length<2||displayName.length>80||body.length<1||body.length>5000)return res.status(400).json({error:'Enter a name and a comment between 1 and 5,000 characters.'});
-    const {error}=await db.from('comments').insert({article_id:article.id,display_name:displayName,body,status:'pending'});
+    const {error}=await db.from('comments').insert({article_id:article.id,display_name:displayName,body,user_id:userId,parent_id:parentId,status:'pending'});
     if(error)throw error;
     res.status(201).json({message:'Comment submitted for moderation.'});
   }catch(error){res.status(500).json({error:error instanceof Error?error.message:'Unable to submit comment'});}
@@ -469,6 +490,63 @@ app.get('/go/social/:postId',async(req,res)=>{
 app.get('/v1/social/cards/:identifier.svg',async(req,res)=>{
   try{const identifier=req.params.identifier.replace(/\.svg$/i,'');const article=await articleByIdentifier(identifier);if(!article)return res.status(404).end();res.set('Cache-Control','public, max-age=3600').type('image/svg+xml').send(brandedSocialCardSvg(article));}
   catch{res.status(404).end();}
+});
+
+// Notification centre. Reader preferences remain in Supabase; delivery credentials remain
+// exclusively in Railway variables and are never returned by these endpoints.
+app.get('/v1/notifications/public-key',(_req,res)=>res.json({publicKey:webPushPublicKey()}));
+app.post('/v1/notifications/subscribe',async(req,res)=>{
+  try{
+    if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many subscription attempts. Please try again shortly.'});
+    const email=safeEmail(req.body?.email);if(!email)return res.status(400).json({error:'Enter a valid email address.'});
+    const userId=await optionalAnalyticsUser(req);const subscription=req.body?.pushSubscription&&typeof req.body.pushSubscription==='object'?req.body.pushSubscription as Record<string,any>:null;
+    const endpoint=typeof subscription?.endpoint==='string'&&/^https:\/\//i.test(subscription.endpoint)?subscription.endpoint:null;
+    const keys=subscription?.keys&&typeof subscription.keys==='object'?subscription.keys:{};
+    if(endpoint&&(!keys.p256dh||!keys.auth))return res.status(400).json({error:'Your browser push subscription is incomplete. Turn notifications on again and retry.'});
+    const base=notificationPreferences(req.body?.preferences);if(endpoint)base.push_enabled=true;
+    const payload={email,user_id:userId,phone:safeText(req.body?.phone,40)||null,push_token:endpoint,push_endpoint:endpoint,push_subscription:endpoint?subscription:{},preferences:base,source:'notification-centre',active:true,confirmed_at:new Date().toISOString()};
+    const {data,error}=await db.from('notification_subscriptions').upsert(payload,{onConflict:'email'}).select('id,email,preferences,active').single();if(error)throw error;
+    // Keep the long-standing newsletter list consistent for existing newsroom reports.
+    await db.from('newsletter').upsert({email,status:'subscribed',source:'notification-centre'},{onConflict:'email'});
+    res.status(201).json({data,pushConfigured:Boolean(webPushPublicKey())});
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to save your notification preferences.')});}
+});
+app.get('/v1/notifications/me',requireUser,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;const [subscription,notifications]=await Promise.all([
+    db.from('notification_subscriptions').select('id,email,phone,preferences,active,created_at,last_delivered_at').eq('user_id',userId).maybeSingle(),
+    db.from('notifications').select('id,title,message,type,url,metadata,read_status,created_at').eq('user_id',userId).order('created_at',{ascending:false}).limit(50)
+  ]);if(subscription.error)throw subscription.error;if(notifications.error)throw notifications.error;res.json({subscription:subscription.data||null,notifications:notifications.data||[]});}
+  catch(error){res.status(503).json({error:errorMessage(error,'Notification preferences are temporarily unavailable.')});}
+});
+app.patch('/v1/notifications/me',requireUser,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;const {data:current,error:currentError}=await db.from('notification_subscriptions').select('id,preferences').eq('user_id',userId).maybeSingle();if(currentError)throw currentError;if(!current)return res.status(404).json({error:'Create your notification subscription first.'});const {data,error}=await db.from('notification_subscriptions').update({preferences:notificationPreferences(req.body?.preferences,current.preferences||{}),phone:safeText(req.body?.phone,40)||null,active:req.body?.active!==false}).eq('id',current.id).select('id,email,preferences,active').single();if(error)throw error;res.json({data});}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to update notification preferences.')});}
+});
+app.post('/v1/notifications/:id/read',requireUser,async(req,res)=>{
+  try{if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid notification.'});const {error}=await db.from('notifications').update({read_status:true,read_at:new Date().toISOString()}).eq('id',req.params.id).eq('user_id',(req as StaffRequest).userId!);if(error)throw error;res.json({ok:true});}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to update this notification.')});}
+});
+app.get('/v1/admin/notifications/overview',requireStaff,async(_req,res)=>{
+  try{const since=new Date(Date.now()-30*24*60*60_000).toISOString();const [subscriptions,deliveries,briefs,campaigns,latest]=await Promise.all([
+    db.from('notification_subscriptions').select('id,email,preferences,active,created_at,last_delivered_at',{count:'exact'}).order('created_at',{ascending:false}).limit(300),
+    db.from('notification_deliveries').select('id,channel,status,scheduled_for,sent_at,attempts,last_error,created_at,notifications(title,type),notification_subscriptions(email)').gte('created_at',since).order('created_at',{ascending:false}).limit(500),
+    db.from('daily_briefs').select('*').order('sent_date',{ascending:false}).limit(30),
+    db.from('notification_campaigns').select('*').order('scheduled_for',{ascending:false}).limit(100),
+    db.from('notifications').select('id,title,message,type,created_at').order('created_at',{ascending:false}).limit(20)
+  ]);const all=[subscriptions,deliveries,briefs,campaigns,latest];const failed=all.find(item=>item.error);if(failed?.error)throw failed.error;const deliveryRows=deliveries.data||[];const today=new Date();today.setHours(0,0,0,0);res.json({subscribers:subscriptions.data||[],deliveries:deliveryRows,briefs:briefs.data||[],campaigns:campaigns.data||[],latest:latest.data||[],stats:{subscribers:subscriptions.count||0,active:(subscriptions.data||[]).filter(row=>row.active).length,sentToday:deliveryRows.filter(row=>row.status==='sent'&&row.sent_at&&new Date(row.sent_at)>=today).length,failed:deliveryRows.filter(row=>row.status==='failed').length,queue:deliveryRows.filter(row=>['pending','retry','processing'].includes(row.status)).length,dailyBriefSubscribers:(subscriptions.data||[]).filter(row=>row.active&&Boolean((row.preferences as any)?.daily_brief)).length}});}
+  catch(error){res.status(503).json({error:errorMessage(error,'Run notification-personalization-upgrade.sql in Supabase first.')});}
+});
+app.post('/v1/admin/notifications/send',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const title=safeText(req.body?.title,160),message=safeText(req.body?.message,1200),type=String(req.body?.type||'manual'),url=safeText(req.body?.url,500)||null;if(!title||!message)return res.status(400).json({error:'A title and message are required.'});if(!notificationTypes.has(type))return res.status(400).json({error:'Invalid notification type.'});if(url&&!/^https?:\/\//i.test(url))return res.status(400).json({error:'The destination URL must begin with https:// or http://.'});const categories=Array.isArray(req.body?.categories)?req.body.categories.map((item:unknown)=>normaliseCategorySlug(item)).filter(Boolean):[];const audience=Array.isArray(req.body?.audience)?req.body.audience.map((item:unknown)=>String(item)).filter((item:string)=>notificationPreferenceKeys.has(item)):[];const channels=Array.isArray(req.body?.channels)?req.body.channels.map((item:unknown)=>String(item)).filter((item:string)=>notificationChannels.has(item)):['push','email'];const date=req.body?.scheduledFor?new Date(req.body.scheduledFor):new Date();if(Number.isNaN(date.getTime()))return res.status(400).json({error:'Choose a valid send time.'});const {data,error}=await db.from('notification_campaigns').insert({title,message,type,url,audience_preferences:audience,category_slugs:categories,channels,scheduled_for:date.toISOString(),status:'scheduled',created_by:userId}).select('*').single();if(error)throw error;if(date.getTime()<=Date.now())void notificationWorker.run().catch(runError=>console.error('Manual notification delivery failed:',runError));res.status(201).json({data});}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to schedule this notification.')});}
+});
+app.post('/v1/admin/notifications/daily-brief',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const queued=await notificationWorker.createDailyBrief(true);void notificationWorker.run().catch(runError=>console.error('Daily Brief delivery failed:',runError));res.json({queued});}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to create the Daily Brief.')});}
+});
+app.post('/v1/admin/notifications/deliveries/:id/retry',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid delivery.'});const {error}=await db.from('notification_deliveries').update({status:'pending',attempts:0,last_error:null,next_attempt_at:new Date().toISOString(),locked_at:null}).eq('id',req.params.id);if(error)throw error;void notificationWorker.run().catch(runError=>console.error('Notification retry failed:',runError));res.json({ok:true});}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to retry this delivery.')});}
 });
 
 // Monetisation: public advertising, reader support and payment hand-off.

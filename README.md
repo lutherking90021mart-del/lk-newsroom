@@ -30,7 +30,8 @@ Use `npm.cmd` in PowerShell if Windows blocks `npm.ps1` because of the execution
 4. Run `supabase/admin-cms-upgrade.sql` once. It enables real advertisement impression and click counters.
 5. Run `supabase/social-media-automation.sql` once if you want automatic social publishing.
 6. Run `supabase/category-pages-upgrade.sql` once. It stores the public category descriptions and adds the Ghana desk used by `/category/ghana`.
-7. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
+7. Run `supabase/notification-personalization-upgrade.sql` once to enable reader notification preferences, the Daily Brief, delivery logs, and comment-reply alerts.
+8. In Authentication, add `http://localhost:5173` and your deployed URL as redirect URLs.
 8. Set only the public Supabase URL and publishable/anon key in `js/config.js`. Never put the service-role key in this browser file.
 9. Create a row for your account in `users_roles` with the `super_admin` role.
 10. Enable Supabase Realtime for `articles`, `comments`, `breaking_news`, and `live_updates`.
@@ -38,6 +39,12 @@ Use `npm.cmd` in PowerShell if Windows blocks `npm.ps1` because of the execution
 If a service-role key was copied into a screenshot or chat, rotate it in Supabase before deployment.
 
 ## Dynamic articles
+
+## Reader notifications and Daily Brief
+
+Run `supabase/notification-personalization-upgrade.sql`, deploy the application, then add the optional notification variables to the **LK Newsroom web** Railway service. Browser push needs `VAPID_SUBJECT`, `VAPID_PUBLIC_KEY`, and `VAPID_PRIVATE_KEY`; create the two keys locally with `npm.cmd run notifications:vapid`. Email needs a verified Resend account plus `RESEND_API_KEY` and `EMAIL_FROM`. SMS is optional and only activates when the Twilio variables are present.
+
+Readers manage alerts at `/pages/notifications.html`; newsroom staff manage campaigns, delivery failures, and Daily Briefs at `/admin/notifications.html`. The Railway worker evaluates new stories and delivery retries every five minutes, and creates the Daily Brief at `DAILY_BRIEF_HOUR` (default: 7, using `TZ=Africa/Accra`).
 
 The web server sends `/news/:identifier` to the article shell. The browser then requests `GET /v1/news/:identifier`, where `identifier` is either the database UUID or slug. Therefore every card opens the exact article that was clicked, for example:
 
