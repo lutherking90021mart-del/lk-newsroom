@@ -63,7 +63,13 @@ function initShell(){
   if($('[data-today]'))$('[data-today]').textContent=new Intl.DateTimeFormat('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date());
   document.querySelectorAll('[data-year]').forEach(element=>element.textContent=new Date().getFullYear());
   $('#theme-toggle')?.addEventListener('click',()=>{const next=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=next;localStorage.setItem('lk-theme',next);});
-  $('#menu-toggle')?.addEventListener('click',()=>$('#mobile-menu')?.classList.toggle('open'));
+  const mobileMenu=$('#mobile-menu');const menuToggle=$('#menu-toggle');
+  const setMobileMenu=open=>{mobileMenu?.classList.toggle('open',open);document.documentElement.classList.toggle('menu-open',open);document.body.classList.toggle('menu-open',open);menuToggle?.setAttribute('aria-expanded',String(open));menuToggle?.setAttribute('aria-label',open?'Close navigation menu':'Open navigation menu');};
+  menuToggle?.addEventListener('click',()=>setMobileMenu(!mobileMenu?.classList.contains('open')));
+  $('#menu-close')?.addEventListener('click',()=>setMobileMenu(false));
+  $('#mobile-menu-backdrop')?.addEventListener('click',()=>setMobileMenu(false));
+  mobileMenu?.querySelectorAll('a').forEach(item=>item.addEventListener('click',()=>setMobileMenu(false)));
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')setMobileMenu(false);});
   document.addEventListener('submit',async event=>{if(!event.target.matches('[data-newsletter-form]'))return;event.preventDefault();const email=$('input',event.target).value;try{const {subscribe}=await import('./supabase-client.js');await subscribe(email);}catch{}event.target.reset();toast("You're subscribed to the LK Daily Brief.");});
   document.addEventListener('submit',event=>{if(!event.target.matches('[data-contact-form]'))return;event.preventDefault();event.target.reset();toast('Thanks — your message has been sent to LK Newsroom.');});
   if(window.AOS)AOS.init({once:true,offset:35,duration:520});
