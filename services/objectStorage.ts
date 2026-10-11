@@ -21,8 +21,11 @@ function sha256(value: Buffer | string) {
 function hmac(key: Buffer | string, value: string) {
   return createHmac('sha256', key).update(value).digest();
 }
+function encodeSegment(part: string) {
+  return encodeURIComponent(part).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+}
 function encodeKey(key: string) {
-  return key.split('/').map(part => encodeURIComponent(part)).join('/');
+  return key.split('/').map(encodeSegment).join('/');
 }
 function signingKey(date: string) {
   const dateKey = hmac(`AWS4${secretAccessKey()}`, date);
@@ -47,7 +50,6 @@ export async function uploadPublicObject(
   const payloadHash = sha256(body);
   const headers: Record<string, string> = {
     'content-type': options.contentType,
-    host,
     'x-amz-content-sha256': payloadHash,
     'x-amz-date': amzDate
   };
@@ -69,5 +71,5 @@ export async function uploadPublicObject(
     const detail = (await response.text()).slice(0, 500);
     throw new Error(`Cloudflare R2 upload failed (${response.status}): ${detail || response.statusText}`);
   }
-  return `${publicBaseUrl()}/${key.split('/').map(part => encodeURIComponent(part)).join('/')}`;
+  return `${publicBaseUrl()}/${encodeKey(key)}`;
 }
