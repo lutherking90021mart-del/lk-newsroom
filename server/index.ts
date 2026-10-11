@@ -12,6 +12,7 @@ import {beginSocialOAuth,completeSocialOAuth} from '../services/socialOAuth.js';
 import {defaultSocialTemplates,ensureSocialGraphics,listSocialTemplates,previewArticleForTemplate,renderSocialGraphicSvg,type SocialTemplate} from '../services/socialGraphics.js';
 import {NotificationWorker} from '../worker/notificationWorker.js';
 import {webPushPublicKey} from '../services/webPush.js';
+import {isR2Configured, uploadPublicObject} from '../services/objectStorage.js';
 
 const url=process.env.SUPABASE_URL;
 const serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -29,7 +30,7 @@ const normaliseCategorySlug=(value:unknown)=>String(value??'').trim().toLowerCas
 app.use(cors({origin:process.env.PUBLIC_ORIGIN?.split(',')||true}));
 // Keep the raw request body only for payment-provider signature verification.
 // Normal application code continues to receive the parsed JSON body.
-app.use(express.json({limit:'100kb',verify:(req,_res,buffer)=>{(req as Request & {rawBody?:Buffer}).rawBody=Buffer.from(buffer);}}));
+app.use(express.json({limit:'8mb',verify:(req,_res,buffer)=>{(req as Request & {rawBody?:Buffer}).rawBody=Buffer.from(buffer);}}));
 
 interface StaffRequest extends Request { userId?:string; }
 function errorMessage(error:unknown,fallback:string){
@@ -46,6 +47,30 @@ async function requireStaff(req:StaffRequest,res:Response,next:NextFunction){
   if(!role)return res.status(403).json({error:'Newsroom role required'});
   req.userId=user.id; next();
 }
+
+app.post('/v1/admin/media/upload',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;
+    if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const mime=String(req.body?.contentType||'').toLowerCase();
+    const extensions:Record<string,string>={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'};
+    if(!extensions[mime])return res.status(400).json({error:'Choose a JPG, PNG or WebP image.'});
+    const encoded=String(req.body?.fileBase64||'');
+    if(!encoded||encoded.length>7_000_000)return res.status(413).json({error:'Image is missing or exceeds the 5 MB upload limit.'});
+    const bytes=Buffer.from(encoded,'base64');
+    if(!bytes.length||bytes.length>5_000_000)return res.status(413).json({error:'Images must be 5 MB or smaller.'});
+    const path=`admin/${Date.now()}-${randomUUID()}.${extensions[mime]}`;
+    let imageUrl:string;
+    if(isR2Configured())imageUrl=await uploadPublicObject(path,bytes,{contentType:mime,cacheControl:'public, max-age=86400'});
+    else{
+      const {error}=await db.storage.from('news-images').upload(path,bytes,{cacheControl:'86400',upsert:false,contentType:mime});
+      if(error)throw error;
+      imageUrl=db.storage.from('news-images').getPublicUrl(path).data.publicUrl;
+    }
+    res.status(201).json({url:imageUrl,storage:isR2Configured()?'cloudflare-r2':'supabase'});
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to upload this image.')});}
+});
+
 async function requireUser(req:StaffRequest,res:Response,next:NextFunction){
   const token=req.headers.authorization?.replace(/^Bearer\s+/i,'');
   if(!token)return res.status(401).json({error:'Sign in to manage personal notifications.'});
