@@ -16,7 +16,7 @@ let failed = 0;
 
 function r2UrlFor(key: string) {
   const base = String(process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  return `${base}/${key.split('/').map(part => encodeURIComponent(part)).join('/')}`;
+  return `${base}/${key.split('/').map(part => encodeURIComponent(part).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)).join('/')}`;
 }
 function replaceUrl(value: unknown): unknown {
   if (typeof value === 'string') {
