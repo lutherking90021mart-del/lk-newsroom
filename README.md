@@ -38,6 +38,8 @@ R2_PUBLIC_BASE_URL=https://media.your-domain.com
 
 Use an R2 S3 API token scoped only to the target bucket, and configure the bucket's custom domain (recommended) or an enabled public `r2.dev` URL. `R2_PUBLIC_BASE_URL` is the public base URL with no trailing slash. Never put R2 credentials in `js/config.js`, commit them, or paste them into chat.
 
+Before copying old media, run `npm run storage:migrate:r2` locally for a dry run. If the counts and configuration look right, run `npm run storage:migrate:r2 -- --apply`. The migration copies objects from the `news-images` and `social-graphics` buckets and updates known public URL fields in the database. It never deletes the original Supabase objects. Keep a database backup and verify the resulting public URLs and social publishing before considering any Supabase bucket cleanup.
+
 When all five values are present, new Admin media uploads, optional feed-image caching, and newly generated social graphics are written to R2. If R2 is not configured, the application keeps using Supabase Storage as a compatibility fallback. Existing Supabase-hosted assets are not deleted or rewritten automatically; migrate and verify old assets separately before disabling or deleting any Supabase bucket. Social graphics with old Supabase URLs are regenerated to R2 when next requested after R2 is configured.
 
 ## Supabase setup
