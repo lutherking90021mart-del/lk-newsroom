@@ -10,7 +10,8 @@
     "worker:once": "tsx worker/runOnce.ts",
     "notifications:vapid": "node scripts/generate-vapid.mjs",
     "typecheck": "tsc --noEmit",
-    "lint:html": "npx html-validate '**/*.html'"
+    "lint:html": "npx html-validate '**/*.html'",
+    "storage:migrate:r2": "tsx scripts/migrateSupabaseStorageToR2.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
