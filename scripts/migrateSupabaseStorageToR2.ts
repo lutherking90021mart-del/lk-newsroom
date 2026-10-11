@@ -42,9 +42,10 @@ async function listAndCopy(bucket: string, prefix = ''): Promise<void> {
         continue;
       }
       const oldUrl = db.storage.from(bucket).getPublicUrl(key).data.publicUrl.split('?')[0];
-      const newUrl = r2UrlFor(key);
-      replacements.set(oldUrl, newUrl);
-      if (!apply) continue;
+      if (!apply) {
+        replacements.set(oldUrl, r2UrlFor(`${bucket}/${key}`));
+        continue;
+      }
       const { data: blob, error: downloadError } = await db.storage.from(bucket).download(key);
       if (downloadError || !blob) {
         failed++;
