@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isR2Configured, isR2PublicUrl, uploadPublicObject } from './objectStorage.js';
 
 export const socialGraphicVariants={
   instagram_feed:{width:1080,height:1080,label:'Instagram Feed'},
@@ -79,15 +80,15 @@ export function socialGraphicVariantForPlatform(platform:string):SocialGraphicVa
 export function graphicUrlForPlatform(assets:SocialGraphicAssets|undefined,platform:string){return assets?.[socialGraphicVariantForPlatform(platform)]||null;}
 export function hasCompleteSocialGraphicAssets(assets:SocialGraphicAssets|undefined|null){return (Object.keys(socialGraphicVariants) as SocialGraphicVariant[]).every(variant=>Boolean(assets?.[variant]));}
 
-/** Renders and caches every required branded social format in the public Supabase social-graphics bucket. */
+/** Renders and caches each social format in Cloudflare R2 when configured, otherwise in Supabase Storage. */
 export async function ensureSocialGraphics(db:SupabaseClient,article:SocialGraphicArticle):Promise<SocialGraphicAssets|null>{
   try{
     const {data:existing,error:existingError}=await db.from('social_graphics').select('assets,source_image_url').eq('article_id',article.id).maybeSingle();if(existingError)throw existingError;
     const assets=(existing?.assets||{}) as SocialGraphicAssets;const complete=hasCompleteSocialGraphicAssets(assets);
-    if(complete&&String(existing?.source_image_url||'')===String(article.featured_image_url||''))return assets;
+    if(complete&&String(existing?.source_image_url||'')===String(article.featured_image_url||'')&&(!isR2Configured()||Object.values(assets).every(isR2PublicUrl)))return assets;
     const template=await templateForArticle(db,article);const next:SocialGraphicAssets={};const version=new Date().toISOString().replace(/[:.]/g,'-');
     for(const variant of Object.keys(socialGraphicVariants) as SocialGraphicVariant[]){
-      const path=`articles/${article.id}/${version}/${variant}.svg`;const svg=renderSocialGraphicSvg(article,template,variant);const {error:uploadError}=await db.storage.from('social-graphics').upload(path,Buffer.from(svg),{contentType:'image/svg+xml',cacheControl:'31536000, immutable',upsert:true});if(uploadError)throw uploadError;const {data:urlData}=db.storage.from('social-graphics').getPublicUrl(path);next[variant]=urlData.publicUrl;
+      const path=`articles/${article.id}/${version}/${variant}.svg`;const svg=renderSocialGraphicSvg(article,template,variant);if(isR2Configured()){next[variant]=await uploadPublicObject(path,Buffer.from(svg),{contentType:'image/svg+xml',cacheControl:'public, max-age=31536000, immutable'});}else{const {error:uploadError}=await db.storage.from('social-graphics').upload(path,Buffer.from(svg),{contentType:'image/svg+xml',cacheControl:'31536000, immutable',upsert:true});if(uploadError)throw uploadError;const {data:urlData}=db.storage.from('social-graphics').getPublicUrl(path);next[variant]=urlData.publicUrl;}
     }
     const {error:saveError}=await db.from('social_graphics').upsert({article_id:article.id,template_id:template.id||null,source_image_url:article.featured_image_url||null,assets:next,generated_at:new Date().toISOString()},{onConflict:'article_id'});if(saveError)throw saveError;return next;
   }catch(error){if(missingTable(error))return null;throw error;}
