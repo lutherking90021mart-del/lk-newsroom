@@ -22,6 +22,26 @@ LK Newsroom is a responsive TV-news style website and editorial dashboard. It us
 
 Use `npm.cmd` in PowerShell if Windows blocks `npm.ps1` because of the execution policy. Keep that PowerShell window open while testing locally; closing it stops the local server and worker.
 
+## Cloudflare R2 media storage (optional)
+
+LK Newsroom keeps Supabase for the database and authentication. To store new uploaded images, cached feed images, and generated social graphics in Cloudflare R2, create a bucket and a public URL first. Existing article and media URLs are left untouched by this change so current pages and scheduled posts keep working.
+
+Add these variables to **both** Railway services that run the web server and worker:
+
+```text
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ACCESS_KEY_ID=your-r2-access-key-id
+R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
+R2_BUCKET_NAME=lk-newsroom-media
+R2_PUBLIC_BASE_URL=https://media.your-domain.com
+```
+
+Use an R2 S3 API token scoped only to the target bucket, and configure the bucket's custom domain (recommended) or an enabled public `r2.dev` URL. `R2_PUBLIC_BASE_URL` is the public base URL with no trailing slash. Never put R2 credentials in `js/config.js`, commit them, or paste them into chat.
+
+Before copying old media, run `npm run storage:migrate:r2` locally for a dry run. If the counts and configuration look right, run `npm run storage:migrate:r2 -- --apply`. The migration copies objects from the `news-images` and `social-graphics` buckets and updates known public URL fields in the database. It never deletes the original Supabase objects. Keep a database backup and verify the resulting public URLs and social publishing before considering any Supabase bucket cleanup.
+
+When all five values are present, new Admin media uploads, optional feed-image caching, and newly generated social graphics are written to R2. If R2 is not configured, the application keeps using Supabase Storage as a compatibility fallback. Existing Supabase-hosted assets are not deleted or rewritten automatically; migrate and verify old assets separately before disabling or deleting any Supabase bucket. Social graphics with old Supabase URLs are regenerated to R2 when next requested after R2 is configured.
+
 ## Supabase setup
 
 1. Create a project in Supabase.

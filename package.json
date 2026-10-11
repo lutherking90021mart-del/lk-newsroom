@@ -3,14 +3,15 @@
   "version": "1.1.0",
   "private": true,
   "type": "module",
-  "description": "LK Newsroom with Supabase CMS and live RSS/API aggregation",
+  "description": "LK Newsroom with Supabase CMS and Cloudflare R2 media storage",
   "scripts": {
     "dev": "tsx watch server/index.ts",
     "start": "tsx server/index.ts",
     "worker:once": "tsx worker/runOnce.ts",
     "notifications:vapid": "node scripts/generate-vapid.mjs",
     "typecheck": "tsc --noEmit",
-    "lint:html": "npx html-validate '**/*.html'"
+    "lint:html": "npx html-validate '**/*.html'",
+    "storage:migrate:r2": "tsx scripts/migrateSupabaseStorageToR2.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
