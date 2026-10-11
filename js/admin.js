@@ -98,10 +98,12 @@ async function articlesManager(draftsOnly=false){
 }
 
 async function uploadPublicImage(file){
-  const db=api();if(!file?.type?.startsWith('image/'))throw new Error('Choose a JPG, PNG or WebP image.');
-  const extension=(file.name.split('.').pop()||'jpg').replace(/[^a-z0-9]/gi,'');const path=`admin/${Date.now()}-${crypto.randomUUID()}.${extension}`;
-  const {error}=await db.storage.from('news-images').upload(path,file,{cacheControl:'86400',upsert:false,contentType:file.type});if(error)tableError(error);
-  return db.storage.from('news-images').getPublicUrl(path).data.publicUrl;
+  if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type))throw new Error('Choose a JPG, PNG or WebP image.');
+  if(file.size>5_000_000)throw new Error('Images must be 5 MB or smaller.');
+  const bytes=new Uint8Array(await file.arrayBuffer());let binary='';const chunkSize=0x8000;
+  for(let offset=0;offset<bytes.length;offset+=chunkSize)binary+=String.fromCharCode(...bytes.subarray(offset,offset+chunkSize));
+  const payload=await aggregatorRequest('/v1/admin/media/upload',{method:'POST',body:JSON.stringify({contentType:file.type,fileBase64:btoa(binary)})});
+  return payload.url;
 }
 async function syncArticleTags(articleId,tagText){
   const db=api();const names=[...new Set(String(tagText||'').split(',').map(name=>name.trim()).filter(Boolean))];
