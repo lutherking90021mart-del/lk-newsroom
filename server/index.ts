@@ -107,7 +107,7 @@ app.patch('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
     const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
     if(req.body?.fullName!==undefined)patch.full_name=safeText(req.body.fullName,120);
     if(req.body?.jobTitle!==undefined)patch.job_title=safeText(req.body.jobTitle,120);
-    if(req.body?.workEmail!==undefined){const v=safeText(req.body.workEmail,254).toLowerCase();if(v&&!/^\S+@\S+\.\S+$/.test(v))return res.status(400).json({error:'Enter a valid work email.'});patch.work_email||null;}
+    if(req.body?.workEmail!==undefined){const v=safeText(req.body.workEmail,254).toLowerCase();if(v&&!/^\S+@\S+\.\S+$/.test(v))return res.status(400).json({error:'Enter a valid work email.'});patch.work_email=v||null;}
     if(req.body?.workPhone!==undefined)patch.work_phone=safeText(req.body.workPhone,40)||null;
     if(req.body?.photoUrl!==undefined){const v=safeText(req.body.photoUrl,1000);if(v){try{if(new URL(v).protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}patch.photo_url=v||null;}
     if(req.body?.biography!==undefined)patch.biography=safeText(req.body.biography,500)||null;
