@@ -195,7 +195,7 @@ function mediaPage(type){
   const seenImages=new Set();
   const photos=feed.filter(article=>{
     const image=String(article.image||'').trim();
-    if(!image||!/^https?:\\/\\//i.test(image)||image===fallbackImage())return false;
+    if(!image||!/^https?:\/\//i.test(image)||image===fallbackImage())return false;
     const key=image.split(/[?#]/)[0].toLowerCase();
     if(seenImages.has(key))return false;
     seenImages.add(key);
