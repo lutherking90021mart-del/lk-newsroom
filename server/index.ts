@@ -83,6 +83,45 @@ app.patch('/v1/admin/company/enquiries/:id',requireStaff,async(req,res)=>{
   }catch(error){res.status(400).json({error:errorMessage(error,'Unable to update enquiry.')});}
 });
 
+app.get('/v1/company/team',async(_req,res)=>{
+  try{const {data,error}=await db.from('company_staff_profiles').select('id,full_name,job_title,work_email,work_phone,photo_url,biography,sort_order').eq('is_published',true).order('sort_order').order('full_name');if(error)throw error;res.json({data:data||[]})}
+  catch(error){res.status(503).json({error:'Team profiles are temporarily unavailable.',data:[]})}
+});
+app.get('/v1/admin/company/team',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data,error}=await db.from('company_staff_profiles').select('*').order('sort_order').order('full_name');if(error)throw error;res.json({data:data||[]})}
+  catch(error){res.status(500).json({error:errorMessage(error,'Unable to load team profiles.')})}
+});
+app.post('/v1/admin/company/team',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const full_name=safeText(req.body?.fullName,120),job_title=safeText(req.body?.jobTitle,120),work_email=safeText(req.body?.workEmail,254).toLowerCase()||null,work_phone=safeText(req.body?.workPhone,40)||null,photo_url=safeText(req.body?.photoUrl,1000)||null,biography=safeText(req.body?.biography,500)||null,sort_order=Math.max(0,Math.min(9999,Number(req.body?.sortOrder)||100)),is_published=req.body?.isPublished===true;
+    if(full_name.length<2||job_title.length<2)return res.status(400).json({error:'Full name and job title are required.'});
+    if(work_email&&!/^\S+@\S+\.\S+$/.test(work_email))return res.status(400).json({error:'Enter a valid work email.'});
+    if(photo_url){try{const u=new URL(photo_url);if(u.protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}
+    const {data,error}=await db.from('company_staff_profiles').insert({full_name,job_title,work_email,work_phone,photo_url,biography,sort_order,is_published}).select().single();if(error)throw error;res.status(201).json({data})
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to create staff profile.')})}
+});
+app.patch('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid profile ID.'});
+    const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
+    if(req.body?.fullName!==undefined)patch.full_name=safeText(req.body.fullName,120);
+    if(req.body?.jobTitle!==undefined)patch.job_title=safeText(req.body.jobTitle,120);
+    if(req.body?.workEmail!==undefined){const v=safeText(req.body.workEmail,254).toLowerCase();if(v&&!/^\S+@\S+\.\S+$/.test(v))return res.status(400).json({error:'Enter a valid work email.'});patch.work_email||null;}
+    if(req.body?.workPhone!==undefined)patch.work_phone=safeText(req.body.workPhone,40)||null;
+    if(req.body?.photoUrl!==undefined){const v=safeText(req.body.photoUrl,1000);if(v){try{if(new URL(v).protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}patch.photo_url=v||null;}
+    if(req.body?.biography!==undefined)patch.biography=safeText(req.body.biography,500)||null;
+    if(req.body?.sortOrder!==undefined)patch.sort_order=Math.max(0,Math.min(9999,Number(req.body.sortOrder)||0));
+    if(req.body?.isPublished!==undefined)patch.is_published=req.body.isPublished===true;
+    if(patch.full_name===''||patch.job_title==='')return res.status(400).json({error:'Name and job title cannot be empty.'});
+    const {data,error}=await db.from('company_staff_profiles').update(patch).eq('id',req.params.id).select().single();if(error)throw error;res.json({data})
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to update staff profile.')})}
+});
+app.delete('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid profile ID.'});const {error}=await db.from('company_staff_profiles').delete().eq('id',req.params.id);if(error)throw error;res.json({ok:true})}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to delete staff profile.')})}
+});
+
 // Public company-hub assistant. Configure OPENAI_API_KEY on the server to enable AI responses.
 const companyChatWindows=new Map<string,{count:number;resetAt:number}>();
 app.post('/v1/company/chat',async(req,res)=>{
