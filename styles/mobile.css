@@ -23,3 +23,41 @@ html,body{width:100%;max-width:100%;overflow-x:hidden}img,video,iframe,embed,obj
 @media (max-width:375px){.container{width:min(100% - 24px,var(--container))}.brand{width:50px;height:50px}.header-actions{gap:3px}.header-actions .icon-button{width:35px;height:35px}.hero-slider{height:345px}.hero-content{right:14px;left:14px}.hero-content h1{font-size:1.7rem}.category-tiles{gap:8px}.category-tile{min-height:124px;padding:12px}.category-tile i{font-size:1.25rem}.news-card__body{padding:13px}.article-body{font-size:.98rem}.gallery-grid{grid-auto-rows:104px}}
 /* 320px devices. */
 @media (max-width:320px){.hero-slider{height:330px}.hero-content h1{font-size:1.55rem}.category-tiles{grid-template-columns:1fr}.category-tile{min-height:112px}.footer-main{padding-top:30px}}
+
+/* Mobile polish: keep ticker, sidebar widgets and ad placements inside the viewport. */
+@media (max-width: 767px) {
+  .breaking-inner { gap: 0; min-width: 0; }
+  .breaking-label { position: relative; flex: 0 0 auto; padding-inline: 12px; font-size: .7rem; }
+  .breaking-label::after { display: none; }
+  .ticker-window { min-width: 0; }
+  .ticker-track { padding-left: 18px; animation-duration: 38s; }
+  .ticker-item { margin-right: 34px; font-size: .8rem; }
+
+  .content-with-sidebar, .sidebar, .sidebar-widget { min-width: 0; max-width: 100%; }
+  .sidebar { padding-inline: 0; }
+  .sidebar-widget h3 { text-align: center; margin-top: 0; }
+  .ranked-list { margin: 0; padding: 0 12px; }
+  .ranked-list li {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px 0;
+    overflow-wrap: anywhere;
+  }
+  .ranked-list li::before { text-align: center; font-size: 1.15rem; }
+  .sidebar-widget.weather { width: 100%; margin-inline: auto; padding: 22px 18px; }
+  .weather-heading, .weather-main { justify-content: center; }
+  .weather-location { justify-content: center; flex-wrap: wrap; }
+  .weather-location button { margin-left: 0; }
+  .weather-details { justify-content: center; }
+  .sidebar-widget.ad-slot { width: 100%; margin-inline: auto; }
+  .ad-slot:has(.ad-link) .ad-link img { width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; }
+  .section-heading { min-width: 0; }
+  .section-heading h2 { min-width: 0; overflow-wrap: anywhere; }
+}
+@media (max-width: 425px) {
+  .breaking-label { padding-inline: 9px; font-size: .66rem; }
+  .ticker-track { padding-left: 12px; }
+  .ranked-list { padding-inline: 8px; }
+  .ranked-list li { grid-template-columns: 34px minmax(0, 1fr); gap: 8px; }
+}
+
