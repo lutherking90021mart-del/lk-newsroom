@@ -48,6 +48,41 @@ async function requireStaff(req:StaffRequest,res:Response,next:NextFunction){
   req.userId=user.id; next();
 }
 
+// Company hub enquiries are stored privately in Supabase and exposed to staff only.
+app.post('/v1/company/enquiries',async(req,res)=>{
+  try{
+    const name=safeText(req.body?.name,120);
+    const email=safeText(req.body?.email,254).toLowerCase();
+    const topic=safeText(req.body?.topic,100)||'General enquiry';
+    const message=safeText(req.body?.message,5000);
+    if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||message.length<5)return res.status(400).json({error:'Please provide your name, a valid email and a message.'});
+    const {data,error}=await db.from('company_enquiries').insert({name,email,topic,message,status:'new'}).select('id,created_at').single();
+    if(error)throw error;
+    res.status(201).json({ok:true,id:data.id,createdAt:data.created_at,message:'Your enquiry has been sent to the LK Newsroom team.'});
+  }catch(error){console.error('Company enquiry save failed:',errorMessage(error,'database error'));res.status(503).json({error:'We could not save your enquiry right now. Please email lutherking90021mart@gmail.com or use WhatsApp.'});}
+});
+app.get('/v1/admin/company/enquiries',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;
+    if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const status=String(req.query.status||'all');
+    let query=db.from('company_enquiries').select('id,name,email,topic,message,status,admin_notes,created_at,updated_at,handled_by').order('created_at',{ascending:false}).limit(200);
+    if(['new','in_progress','resolved','spam'].includes(status))query=query.eq('status',status);
+    const {data,error}=await query;if(error)throw error;res.json({data:data||[]});
+  }catch(error){res.status(500).json({error:errorMessage(error,'Unable to load enquiries.')});}
+});
+app.patch('/v1/admin/company/enquiries/:id',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;
+    if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid enquiry ID.'});
+    const status=String(req.body?.status||'');
+    if(!['new','in_progress','resolved','spam'].includes(status))return res.status(400).json({error:'Invalid enquiry status.'});
+    const {data,error}=await db.from('company_enquiries').update({status,admin_notes:safeText(req.body?.adminNotes,2000)||null,handled_by:userId,updated_at:new Date().toISOString()}).eq('id',req.params.id).select('id,status,admin_notes,handled_by,updated_at').single();
+    if(error)throw error;res.json({data});
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to update enquiry.')});}
+});
+
 // Public company-hub assistant. Configure OPENAI_API_KEY on the server to enable AI responses.
 const companyChatWindows=new Map<string,{count:number;resetAt:number}>();
 app.post('/v1/company/chat',async(req,res)=>{
