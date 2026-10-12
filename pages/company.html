@@ -71,6 +71,7 @@
 <div class="quick-actions"><button data-question="How do I advertise?">Advertising</button><button data-question="How do I pay?">Payment details</button><button data-question="How do I contact the team?">Contact team</button><button data-question="Talk to an administrator on WhatsApp">Talk to admin</button></div>
 <form class="chat-input" id="chat-form"><input id="chat-text" aria-label="Type your question" placeholder="Type your question…" autocomplete="off" required><button aria-label="Send message"><i class="fa-solid fa-arrow-up"></i></button></form>
 </section>
+<script src="../js/config.js"></script>
 <script>
 (function(){
  const $=s=>document.querySelector(s);
@@ -89,7 +90,7 @@
  async function answer(q){const s=q.toLowerCase();
   if(/admin|human|person|whatsapp|staff|speak to|talk to/.test(s)){addBubble('I can hand you over to our team on WhatsApp. Tap below to continue with an administrator.', 'bot');const a=document.createElement('a');a.className='btn btn-primary';a.style.margin='0 0 8px 15px';a.href=handoff;a.target='_blank';a.rel='noopener';a.textContent='Talk to an administrator on WhatsApp';messages.appendChild(a);messages.scrollTop=messages.scrollHeight;return}
   try{
-    const response=await fetch('/v1/company/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
+    const response=await fetch((window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')+'/v1/company/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
     const data=await response.json();
     if(response.ok&&data.answer){addBubble(data.answer,'bot');return}
     if(response.status!==503&&response.status!==429)throw new Error(data.error||'Assistant unavailable');
