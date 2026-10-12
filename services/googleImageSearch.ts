@@ -6,36 +6,45 @@ export interface ImageSearchCandidate {
   pageUrl:string;
 }
 
-function publisherDomain(originalUrl?:string){try{return originalUrl?new URL(originalUrl).hostname.replace(/^www\./,''):'';}catch{return '';}}
-function isPublisherCandidate(candidate:ImageSearchCandidate,domain:string){
-  if(!domain)return false;
-  try{const host=new URL(candidate.pageUrl).hostname.replace(/^www\./,'');return host===domain||host.endsWith(`.${domain}`);}catch{return false;}
-}
-
 /**
- * Searches Google through the official Programmable Search JSON API.
- * This is intentionally server-only: the API key never reaches the browser.
+ * Searches Pixabay for illustrative editorial photos.
+ * This runs server-side; the Pixabay API key never reaches the browser.
+ *
+ * These are stock/illustrative images, not verified photographs of the reported event.
+ * The caller stores the Pixabay image page URL for attribution.
  */
-export async function findImageCandidates(title:string,originalUrl?:string,limit=5):Promise<ImageSearchCandidate[]>{
-  const key=process.env.GOOGLE_CUSTOM_SEARCH_API_KEY?.trim();
-  const engineId=process.env.GOOGLE_CUSTOM_SEARCH_ENGINE_ID?.trim();
-  if(!key||!engineId)throw new Error('Google image search is not configured. Add GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_ENGINE_ID to the server variables.');
+export async function findImageCandidates(title:string,_originalUrl?:string,limit=5):Promise<ImageSearchCandidate[]>{
+  const key=process.env.PIXABAY_API_KEY?.trim();
+  if(!key)throw new Error('Pixabay image search is not configured. Add PIXABAY_API_KEY to the server environment.');
 
-  const domain=publisherDomain(originalUrl);
-  // Prefer the original publisher so an editor can choose the most relevant, attributable image.
-  const query=`${domain?`site:${domain} `:''}${title}`.slice(0,220);
-  const params=new URLSearchParams({key,cx:engineId,q:query,searchType:'image',safe:'active',num:String(Math.max(1,Math.min(limit,10)))});
-  const response=await fetch(`https://www.googleapis.com/customsearch/v1?${params}`,{signal:AbortSignal.timeout(15_000)});
-  if(!response.ok){const detail=await response.json().catch(()=>null) as any;throw new Error(detail?.error?.message||`Google image search returned ${response.status}`);}
+  const query=title.trim().slice(0,100);
+  if(!query)return [];
+  const params=new URLSearchParams({
+    key,
+    q:query,
+    image_type:'photo',
+    safesearch:'true',
+    lang:'en',
+    per_page:String(Math.max(3,Math.min(limit,10))),
+  });
+  const response=await fetch(`https://pixabay.com/api/?${params}`,{signal:AbortSignal.timeout(15_000)});
+  if(!response.ok){
+    // Do not include the request URL in the error: it contains the API key.
+    throw new Error(`Pixabay image search returned HTTP ${response.status}`);
+  }
   const payload=await response.json() as any;
-  return (payload.items||[]).map((item:any)=>({
-    imageUrl:String(item.link||''),thumbnailUrl:String(item.image?.thumbnailLink||item.link||''),title:String(item.title||'Image result'),sourceName:String(item.displayLink||domain||'Google result'),pageUrl:String(item.image?.contextLink||item.link||'')
-  })).filter((item:ImageSearchCandidate)=>/^https:\/\//i.test(item.imageUrl));
+  if(payload?.error)throw new Error(String(payload.error));
+  return (payload.hits||[]).map((item:any)=>({
+    imageUrl:String(item.webformatURL||item.largeImageURL||''),
+    thumbnailUrl:String(item.previewURL||item.webformatURL||''),
+    title:String(item.tags||'Pixabay photo'),
+    sourceName:'Pixabay',
+    pageUrl:String(item.pageURL||''),
+  })).filter((item:ImageSearchCandidate)=>/^https:\/\//i.test(item.imageUrl)&&/^https:\/\//i.test(item.pageUrl));
 }
 
-/** Returns only an image result whose context page belongs to the original publisher. */
+/** Returns the best available Pixabay photo as an illustrative image, not an event-verified photo. */
 export async function findPublisherImage(title:string,originalUrl?:string){
-  const domain=publisherDomain(originalUrl);if(!domain)return null;
   const candidates=await findImageCandidates(title,originalUrl,5);
-  return candidates.find(candidate=>isPublisherCandidate(candidate,domain))||null;
+  return candidates[0]||null;
 }
