@@ -54,7 +54,7 @@
 <div class="field"><label for="name">Your name</label><input id="name" name="name" autocomplete="name" required></div><div class="field"><label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required></div>
 <div class="field full"><label for="topic">What is this about?</label><select id="topic" name="topic"><option>General enquiry</option><option>Advertising enquiry</option><option>Editorial / news enquiry</option><option>Payment confirmation</option><option>Technical support</option></select></div>
 <div class="field full"><label for="message">Message</label><textarea id="message" name="message" required placeholder="How can we help?"></textarea></div>
-<div class="field full"><button class="btn btn-primary" type="submit">Prepare email <i class="fa-solid fa-paper-plane"></i></button><small style="color:var(--muted)">This opens your email app with your message ready to send; it does not silently submit data.</small></div>
+<div class="field full"><button class="btn btn-primary" type="submit">Send enquiry <i class="fa-solid fa-paper-plane"></i></button><small style="color:var(--muted)">Your enquiry is saved privately for the team. Email notification is sent when configured.</small></div>
 </div></form></div></div></section>
 <section class="section section-alt"><div class="wrap"><div class="section-head reveal"><div><span class="eyebrow">Quick answers</span><h2>Frequently asked questions</h2></div></div><div class="faq-grid">
 <details class="reveal"><summary>How do I advertise with LK Newsroom?</summary><p>Submit a request on our advertising page. We review it, discuss placement and pricing, and send approved next steps before you pay.</p></details>
@@ -82,28 +82,54 @@
  fetch((window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')+'/v1/company/team').then(r=>r.ok?r.json():{data:[]}).then(payload=>{const grid=$('#team-cards');(payload.data||[]).forEach(p=>{const card=document.createElement('article');card.className='person reveal';const avatar=document.createElement('div');avatar.className='avatar';if(p.photo_url){const img=document.createElement('img');img.src=p.photo_url;img.alt='Portrait of '+p.full_name;img.loading='lazy';avatar.appendChild(img)}else avatar.textContent=String(p.full_name||'?').split(/\\s+/).map(n=>n[0]||'').slice(0,2).join('').toUpperCase();const body=document.createElement('div');const tag=document.createElement('span');tag.className='tag';tag.textContent='LK Newsroom';const name=document.createElement('h3');name.textContent=p.full_name;const role=document.createElement('p');role.textContent=p.job_title;body.append(tag,name,role);if(p.biography){const bio=document.createElement('p');bio.textContent=p.biography;body.appendChild(bio)}if(p.work_email){const a=document.createElement('a');a.href='mailto:'+p.work_email;a.textContent=p.work_email;body.appendChild(a)}if(p.work_phone){const a=document.createElement('a');a.href='tel:'+p.work_phone;a.textContent=p.work_phone;body.appendChild(a)}card.append(avatar,body);grid.appendChild(card);if(observer)observer.observe(card)});}).catch(()=>{});
  document.querySelectorAll('[data-copy]').forEach(btn=>btn.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(btn.dataset.copy);const old=btn.innerHTML;btn.innerHTML='<i class="fa-solid fa-check"></i> Copied';setTimeout(()=>btn.innerHTML=old,1500)}catch(e){window.prompt('Copy this value:',btn.dataset.copy)}}));
  document.querySelectorAll('[data-prefill]').forEach(a=>a.addEventListener('click',()=>{const topic=$('#topic');if(topic)topic.value=a.dataset.prefill.includes('Advertising')?'Advertising enquiry':'Editorial / news enquiry'}));
- $('#contact-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const submit=form.querySelector('button[type="submit"]');const fd=new FormData(form);const payload={name:fd.get('name'),email:fd.get('email'),topic:fd.get('topic'),message:fd.get('message')};const original=submit.innerHTML;submit.disabled=true;submit.textContent='Sending enquiry…';try{const response=await fetch((window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')+'/v1/company/enquiries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not send enquiry');form.reset();submit.innerHTML='<i class="fa-solid fa-check"></i> Enquiry sent';const notice=document.createElement('p');notice.setAttribute('role','status');notice.style.cssText='color:#75e8f5;font-size:13px;margin:12px 0 0';notice.textContent='Thanks! Your enquiry has been sent to the LK Newsroom team.';form.querySelector('[role="status"]')?.remove();form.appendChild(notice)}catch(error){const notice=document.createElement('p');notice.setAttribute('role','alert');notice.style.cssText='color:#ffc857;font-size:13px;margin:12px 0 0';notice.textContent=(error instanceof Error?error.message:'Unable to send enquiry')+' You can email lutherking90021mart@gmail.com or use WhatsApp.';form.querySelector('[role="alert"]')?.remove();form.appendChild(notice)}finally{submit.disabled=false;if(submit.textContent==='Sending enquiry…')submit.innerHTML=original}});
+ $('#contact-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const submit=form.querySelector('button[type="submit"]');const fd=new FormData(form);const payload={name:fd.get('name'),email:fd.get('email'),topic:fd.get('topic'),message:fd.get('message')};const original=submit.innerHTML;submit.disabled=true;submit.textContent='Sending enquiry…';try{const response=await fetch((window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')+'/v1/company/enquiries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not send enquiry');form.reset();submit.innerHTML='<i class="fa-solid fa-check"></i> Enquiry sent';const notice=document.createElement('p');notice.setAttribute('role','status');notice.style.cssText='color:#75e8f5;font-size:13px;margin:12px 0 0';notice.textContent=result.emailSent?'Thanks! Your enquiry was saved and emailed to the LK Newsroom team.':'Thanks! Your enquiry was saved, but email notification is not configured yet. Please use WhatsApp if your message is urgent.';form.querySelector('[role="status"]')?.remove();form.appendChild(notice)}catch(error){const notice=document.createElement('p');notice.setAttribute('role','alert');notice.style.cssText='color:#ffc857;font-size:13px;margin:12px 0 0';notice.textContent=(error instanceof Error?error.message:'Unable to send enquiry')+' You can email lutherking90021mart@gmail.com or use WhatsApp.';form.querySelector('[role="alert"]')?.remove();form.appendChild(notice)}finally{submit.disabled=false;if(submit.textContent==='Sending enquiry…')submit.innerHTML=original}});
  const panel=$('#chat-panel'),launch=$('#chat-launch'),messages=$('#chat-messages'),input=$('#chat-text');
  function toggle(open){panel.classList.toggle('open',open);launch.setAttribute('aria-expanded',String(open));if(open)setTimeout(()=>input.focus(),50)}
- launch.addEventListener('click',()=>toggle(!panel.classList.contains('open')));$('#chat-close').addEventListener('click',()=>toggle(false));
- function addBubble(text,who){const b=document.createElement('div');b.className='bubble '+who;b.textContent=text;messages.appendChild(b);messages.scrollTop=messages.scrollHeight}
- const handoff='https://wa.me/233559627349?text='+encodeURIComponent('Hello LK Newsroom team, I was chatting with the LK Assistant and would like help from an administrator.');
- async function answer(q){const s=q.toLowerCase();
-  if(/admin|human|person|whatsapp|staff|speak to|talk to/.test(s)){addBubble('I can hand you over to our team on WhatsApp. Tap below to continue with an administrator.', 'bot');const a=document.createElement('a');a.className='btn btn-primary';a.style.margin='0 0 8px 15px';a.href=handoff;a.target='_blank';a.rel='noopener';a.textContent='Talk to an administrator on WhatsApp';messages.appendChild(a);messages.scrollTop=messages.scrollHeight;return}
-  try{
-    const response=await fetch((window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')+'/v1/company/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
-    const data=await response.json();
-    if(response.ok&&data.answer){addBubble(data.answer,'bot');return}
-    if(response.status!==503&&response.status!==429)throw new Error(data.error||'Assistant unavailable');
-  }catch(error){console.warn('AI company assistant unavailable; using quick answers.',error)}
-  if(/advert|campaign|banner|sponsor|quote|price|cost/.test(s)){addBubble('For advertising, submit your campaign request on our Advertise page. We review the request, confirm placement and quote, then give you payment instructions. Please do not pay before approval.', 'bot');const a=document.createElement('a');a.href='advertise.html';a.className='btn btn-outline';a.style.margin='0 0 8px 15px';a.textContent='Open advertising request';messages.appendChild(a);messages.scrollTop=messages.scrollHeight;return}
-  if(/pay|bank|fidelity|momo|mobile money|account|transfer|receipt/.test(s)){addBubble('Payment methods currently listed: Fidelity Bank — Martin Luther Awuzah, account 2600778600414; Mobile Money — Charles Adjei, 0557697377. The recipient names differ, so confirm the correct recipient and amount with the team using an approved quote or invoice before sending. Keep your receipt for verification.', 'bot');addBubble('Would you like to speak to an administrator to confirm payment details?', 'bot');const a=document.createElement('a');a.href=handoff;a.target='_blank';a.rel='noopener';a.className='btn btn-primary';a.style.margin='0 0 8px 15px';a.textContent='Confirm with an administrator';messages.appendChild(a);messages.scrollTop=messages.scrollHeight;return}
-  if(/contact|email|phone|call|reach/.test(s)){addBubble('You can email lutherking90021mart@gmail.com, call +233 55 962 7349, or message our team on WhatsApp.', 'bot');const a=document.createElement('a');a.href=handoff;a.target='_blank';a.rel='noopener';a.className='btn btn-outline';a.style.margin='0 0 8px 15px';a.textContent='Open WhatsApp';messages.appendChild(a);messages.scrollTop=messages.scrollHeight;return}
-  if(/team|worker|staff|who are you|about|newsroom/.test(s)){addBubble('LK Newsroom Global is a digital news and media platform operated under Lutherking Multimedia. Martin Luther Awuzah is the company lead. Ask me about advertising, payments or contact options, or I can connect you to an administrator.', 'bot');return}
-  addBubble('I can help with advertising requests, payment instructions, contact details and the newsroom. Try asking “How do I advertise?” or choose “Talk to admin” for a person.', 'bot')
- }
- function send(q){q=(q||'').trim();if(!q)return;addBubble(q,'user');answer(q)}
- $('#chat-form').addEventListener('submit',e=>{e.preventDefault();send(input.value);input.value=''});document.querySelectorAll('[data-question]').forEach(b=>b.addEventListener('click',()=>send(b.dataset.question)));
+ // Chat panel is controlled by the standalone, defensive chat script below.
+
 })();
 </script>
+
+<script>
+(function(){
+ const panel=document.getElementById('chat-panel');
+ const launch=document.getElementById('chat-launch');
+ const close=document.getElementById('chat-close');
+ const messages=document.getElementById('chat-messages');
+ const form=document.getElementById('chat-form');
+ const input=document.getElementById('chat-text');
+ if(!panel||!launch||!close||!messages||!form||!input)return;
+ const api=(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'');
+ const handoff='https://wa.me/233559627349?text='+encodeURIComponent('Hello LK Newsroom team, I need help from an administrator.');
+ function toggle(open){panel.classList.toggle('open',open);launch.setAttribute('aria-expanded',String(open));if(open)setTimeout(()=>input.focus(),50)}
+ launch.addEventListener('click',function(){toggle(!panel.classList.contains('open'))});
+ close.addEventListener('click',function(){toggle(false)});
+ function bubble(text,who){const b=document.createElement('div');b.className='bubble '+who;b.textContent=text;messages.appendChild(b);messages.scrollTop=messages.scrollHeight}
+ function link(text,url){const a=document.createElement('a');a.className='btn btn-primary';a.style.margin='0 0 8px 15px';a.href=url;a.target='_blank';a.rel='noopener';a.textContent=text;messages.appendChild(a);messages.scrollTop=messages.scrollHeight}
+ async function send(raw){
+  const q=String(raw||'').trim();if(!q)return;
+  bubble(q,'user');
+  if(/admin|human|person|whatsapp|staff|speak to|talk to/.test(q.toLowerCase())){bubble('I can connect you with the LK Newsroom team on WhatsApp.','bot');link('Talk to an administrator on WhatsApp',handoff);return}
+  const pending=document.createElement('div');pending.className='bubble bot';pending.textContent='One moment…';messages.appendChild(pending);messages.scrollTop=messages.scrollHeight;
+  try{
+   const response=await fetch(api+'/v1/company/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
+   const data=await response.json();
+   pending.remove();
+   if(response.ok&&data.answer){bubble(data.answer,'bot');return}
+   if(data.error)bubble(data.error,'bot');else bubble('The AI assistant is temporarily unavailable. You can still contact our team on WhatsApp.','bot');
+   link('Talk to an administrator on WhatsApp',data.handoffUrl||handoff);
+  }catch(err){
+   pending.remove();
+   const s=q.toLowerCase();
+   if(/advert|campaign|banner|sponsor|quote|price|cost/.test(s))bubble('For advertising, submit a request on our Advertise page. We will review the request and confirm the quote before payment.','bot');
+   else if(/pay|bank|momo|mobile money|account|transfer|receipt/.test(s))bubble('Please confirm the payment recipient and amount with our team using an approved quote or invoice before sending money.','bot');
+   else bubble('I could not reach the AI service just now. Please try again or contact our team on WhatsApp.','bot');
+   link('Talk to an administrator on WhatsApp',handoff);
+  }
+ }
+ form.addEventListener('submit',function(e){e.preventDefault();const q=input.value;input.value='';send(q)});
+ document.querySelectorAll('#chat-panel [data-question]').forEach(b=>b.addEventListener('click',()=>send(b.dataset.question)));
+})();
+</script>
+
 </body></html>
