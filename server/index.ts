@@ -584,6 +584,7 @@ function safeCurrency(value:unknown){const currency=String(value||'GHS').trim().
 function safeText(value:unknown,max=1000){return String(value||'').replace(/[\u0000-\u001f]/g,' ').trim().slice(0,max);}
 function paymentReference(){return `LK-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0,8).toUpperCase()}`;}
 function paymentReturnUrl(req:Request,reference:string){return `${publicOrigin(req)}/pages/support.html?payment=${encodeURIComponent(reference)}`;}
+function advertiserPaymentReturnUrl(req:Request,reference:string){return `${publicOrigin(req)}/pages/advertise.html?payment=${encodeURIComponent(reference)}`;}
 async function markPayment(reference:string,status:'paid'|'failed'|'cancelled'|'refunded',providerResponse:Record<string,unknown>={}){
   const {data:transaction,error}=await db.from('payment_transactions').select('*').eq('reference',reference).maybeSingle();
   if(error||!transaction)return;
@@ -598,6 +599,11 @@ async function markPayment(reference:string,status:'paid'|'failed'|'cancelled'|'
   if(transaction.kind==='subscription'&&transaction.subscription_id){
     await db.from('subscriptions').update({status:status==='paid'?'active':status==='cancelled'?'cancelled':status==='refunded'?'cancelled':'failed',start_date:status==='paid'?new Date().toISOString():null}).eq('id',transaction.subscription_id);
     if(newlyPaid)await db.from('revenue').insert({source:'subscriptions',amount:transaction.amount,currency:transaction.currency,type:'received',status:'paid',date:new Date().toISOString().slice(0,10),notes:`Membership ${reference}`});
+  }
+  if(transaction.kind==='advertising'&&transaction.advertiser_request_id&&status==='paid'){
+    // Payment is verified by the signed Paystack webhook before the request is marked paid.
+    await db.from('advertiser_requests').update({status:'converted',reviewed_at:new Date().toISOString()}).eq('id',transaction.advertiser_request_id).eq('status','approved');
+    if(newlyPaid)await db.from('revenue').insert({source:'direct_advertisements',amount:transaction.amount,currency:transaction.currency,type:'received',status:'paid',date:new Date().toISOString().slice(0,10),notes:`Advertising request ${transaction.advertiser_request_id} / ${reference}`});
   }
 }
 function providerSignatureMatches(secret:string,raw:Buffer,signature:string,algorithm:'sha256'|'sha512'='sha512'){
@@ -686,6 +692,35 @@ app.get('/v1/admin/monetization/overview',requireStaff,async(_req,res)=>{
       db.from('advertising_packages').select('*').order('sort_order'),db.from('advertiser_requests').select('*,advertising_packages(title),advertisers(company_name)').order('created_at',{ascending:false}).limit(300),db.from('sponsored_article_details').select('*,articles(title,slug,view_count)').order('created_at',{ascending:false}).limit(200),db.from('affiliate_campaigns').select('*').order('created_at',{ascending:false}),db.from('affiliate_links').select('*,affiliate_campaigns(name)').order('created_at',{ascending:false}),db.from('membership_plans').select('*').order('sort_order'),db.from('subscriptions').select('*,membership_plans(name)').order('created_at',{ascending:false}).limit(200),db.from('donations').select('*').order('created_at',{ascending:false}).limit(200),db.from('payment_transactions').select('*').order('created_at',{ascending:false}).limit(200)
     ]);const all=[packages,requests,details,campaigns,links,plans,subscriptions,donations,transactions];const failure=all.find(item=>item.error);if(failure?.error)throw failure.error;res.json({packages:packages.data||[],requests:requests.data||[],sponsored:details.data||[],affiliateCampaigns:campaigns.data||[],affiliateLinks:links.data||[],plans:plans.data||[],subscriptions:subscriptions.data||[],donations:donations.data||[],transactions:transactions.data||[]});
   }catch(error){res.status(503).json({error:errorMessage(error,'Run monetization-suite-upgrade.sql in Supabase first.')});}
+});
+app.post('/v1/admin/monetization/requests/:id/payment-link',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;
+    if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid request.'});
+    const {data:request,error}=await db.from('advertiser_requests').select('*').eq('id',req.params.id).maybeSingle();
+    if(error)throw error;
+    if(!request)return res.status(404).json({error:'Advertiser request not found.'});
+    if(request.status!=='approved')return res.status(409).json({error:'Approve this request before generating a payment link.'});
+    const amount=safeMoney(request.quoted_price);
+    if(!amount)return res.status(400).json({error:'Set a quoted price greater than zero before generating a payment link.'});
+    const secret=process.env.PAYSTACK_SECRET_KEY;
+    if(!secret)return res.status(503).json({error:'Paystack is not configured. Add PAYSTACK_SECRET_KEY to the server environment.'});
+    const currency=safeCurrency(request.currency)||'GHS';
+    const reference=paymentReference();
+    const saved=await db.from('payment_transactions').insert({kind:'advertising',provider:'paystack',reference,email:request.email,amount,currency,advertiser_request_id:request.id}).select('id').single();
+    if(saved.error)throw saved.error;
+    try{
+      const response=await fetch('https://api.paystack.co/transaction/initialize',{method:'POST',headers:{Authorization:`Bearer ${secret}`,'Content-Type':'application/json'},body:JSON.stringify({email:request.email,amount:Math.round(amount*100),currency,reference,callback_url:advertiserPaymentReturnUrl(req,reference),metadata:{kind:'advertising',advertiserRequestId:request.id,companyName:request.company_name}})});
+      const payload=await response.json() as any;
+      if(!response.ok||!payload.status||!payload.data?.authorization_url)throw new Error(payload.message||'Paystack could not create the payment link.');
+      await db.from('payment_transactions').update({provider_response:{checkout_url:payload.data.authorization_url}}).eq('id',saved.data.id);
+      res.status(201).json({reference,checkoutUrl:payload.data.authorization_url,amount,currency,email:request.email});
+    }catch(error){
+      await db.from('payment_transactions').update({status:'failed',provider_response:{error:errorMessage(error,'Paystack initialization failed.')}}).eq('id',saved.data.id);
+      throw error;
+    }
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to create advertiser payment link.')});}
 });
 app.patch('/v1/admin/monetization/requests/:id',requireStaff,async(req,res)=>{
   try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid request.'});const status=String(req.body?.status||'');if(!['pending','quoted','approved','rejected','converted'].includes(status))return res.status(400).json({error:'Invalid request status.'});const quote=req.body?.quotedPrice===null||req.body?.quotedPrice===''?null:safeMoney(req.body?.quotedPrice,0);const {data,error}=await db.from('advertiser_requests').update({status,quoted_price:quote,admin_notes:safeText(req.body?.adminNotes,2000)||null,reviewed_by:userId,reviewed_at:new Date().toISOString()}).eq('id',req.params.id).select().single();if(error)throw error;res.json({data});}
