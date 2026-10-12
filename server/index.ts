@@ -58,7 +58,18 @@ app.post('/v1/company/enquiries',async(req,res)=>{
     if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||message.length<5)return res.status(400).json({error:'Please provide your name, a valid email and a message.'});
     const {data,error}=await db.from('company_enquiries').insert({name,email,topic,message,status:'new'}).select('id,created_at').single();
     if(error)throw error;
-    res.status(201).json({ok:true,id:data.id,createdAt:data.created_at,message:'Your enquiry has been sent to the LK Newsroom team.'});
+    let emailSent=false;
+    const resendKey=process.env.RESEND_API_KEY;
+    const inbox=process.env.CONTACT_INBOX_EMAIL||'lutherking90021mart@gmail.com';
+    const from=process.env.RESEND_FROM_EMAIL;
+    if(resendKey&&from){
+      try{
+        const mail=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+resendKey,'Content-Type':'application/json'},body:JSON.stringify({from,to:[inbox],reply_to:email,subject:'LK Newsroom enquiry: '+topic,text:'New enquiry received on the LK Newsroom Company Hub.\n\nName: '+name+'\nEmail: '+email+'\nTopic: '+topic+'\nReceived: '+data.created_at+'\n\nMessage:\n'+message})});
+        if(!mail.ok)console.error('Company enquiry email notification failed:',(await mail.text()).slice(0,500));
+        else emailSent=true;
+      }catch(mailError){console.error('Company enquiry email notification failed:',errorMessage(mailError,'email provider error'))}
+    }
+    res.status(201).json({ok:true,id:data.id,createdAt:data.created_at,emailSent,message:emailSent?'Enquiry saved and emailed to the LK Newsroom team.':'Enquiry saved privately; email notification is not configured or is temporarily unavailable.'});
   }catch(error){console.error('Company enquiry save failed:',errorMessage(error,'database error'));res.status(503).json({error:'We could not save your enquiry right now. Please email lutherking90021mart@gmail.com or use WhatsApp.'});}
 });
 app.get('/v1/admin/company/enquiries',requireStaff,async(req,res)=>{
