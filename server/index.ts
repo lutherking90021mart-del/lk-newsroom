@@ -13,6 +13,7 @@ import {defaultSocialTemplates,ensureSocialGraphics,listSocialTemplates,previewA
 import {NotificationWorker} from '../worker/notificationWorker.js';
 import {webPushPublicKey} from '../services/webPush.js';
 import {isR2Configured, uploadPublicObject} from '../services/objectStorage.js';
+import {footballApiRouter} from '../services/footballApi.js';
 
 const url=process.env.SUPABASE_URL;
 const serviceKey=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -31,6 +32,9 @@ app.use(cors({origin:process.env.PUBLIC_ORIGIN?.split(',')||true}));
 // Keep the raw request body only for payment-provider signature verification.
 // Normal application code continues to receive the parsed JSON body.
 app.use(express.json({limit:'8mb',verify:(req,_res,buffer)=>{(req as Request & {rawBody?:Buffer}).rawBody=Buffer.from(buffer);}}));
+
+// Public football data proxy. API_FOOTBALL_KEY remains server-side and is never sent to clients.
+app.use('/v1/football',footballApiRouter);
 
 interface StaffRequest extends Request { userId?:string; }
 function errorMessage(error:unknown,fallback:string){
