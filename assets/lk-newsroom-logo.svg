@@ -1,7 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 92" role="img" aria-labelledby="title desc">
-  <title id="title">LK Newsroom</title><desc id="desc">LK Newsroom logo</desc>
-  <rect width="92" height="92" rx="12" fill="#003366"/>
-  <path d="M20 20h14v38h22v13H20V20Zm42 0h14v19l16-19h17L89 43l22 28H93L78 51l-2 3v17H62V20Z" fill="#fff"/>
-  <text x="110" y="44" fill="#003366" font-family="Arial, sans-serif" font-weight="800" font-size="31" letter-spacing="1">NEWSROOM</text>
-  <rect x="112" y="56" width="188" height="4" fill="#E31E24"/><text x="112" y="78" fill="#536270" font-family="Arial, sans-serif" font-size="12" letter-spacing="1.6">INFORMING TODAY</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 474 474" role="img" aria-labelledby="title desc">
+<title id="title">LK Newsroom official logo</title><desc id="desc">LK in white on a navy blue block above NEWS ROOM in white on a red block, on a warm off-white background.</desc>
+<rect width="474" height="474" fill="#f2efe9"/>
+<rect x="50" y="42" width="377" height="408" fill="#062342"/>
+<rect x="50" y="270" width="377" height="180" fill="#b71920"/>
+<g fill="#fff" font-family="Arial, Helvetica, sans-serif" font-weight="800">
+<text x="82" y="244" font-size="235" letter-spacing="-15">LK</text>
+<text x="91" y="360" font-size="79" letter-spacing="-1">NEWS</text>
+<text x="103" y="429" font-size="70" letter-spacing="-1">ROOM</text>
+</g></svg>
