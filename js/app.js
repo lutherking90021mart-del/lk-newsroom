@@ -178,6 +178,45 @@ async function articlePage(){
 }
 function searchPage(){const list=$('#search-results');const run=()=>{const term=$('#search-term').value.toLowerCase();const category=$('#search-category').value;const author=$('#search-author').value.toLowerCase();const date=$('#search-date').value;const country=$('#search-country')?.value||'';const source=$('#search-source')?.value||'';const found=feed.filter(article=>{const published=new Date(article.publishedAt||article.date).toISOString().slice(0,10);return(!term||article.title.toLowerCase().includes(term))&&(!category||article.category===category)&&(!author||article.author.toLowerCase().includes(author))&&(!date||published===date)&&(!country||article.country===country)&&(!source||article.source===source);});list.innerHTML=found.length?found.map(article=>`<article class="search-result"><img src="${esc(article.image)}" alt="" loading="lazy" onerror="this.src='${fallbackImage()}'"><div><span class="eyebrow">${esc(article.category)}</span><h2><a class="headline" href="/news/${encodeURIComponent(article.id)}">${esc(article.title)}</a></h2><p class="text-muted">${esc(article.excerpt)}</p><div class="meta">${esc(article.source)} · ${esc(article.date)} · ${article.reading} min read</div></div></article>`).join(''):'<div class="empty-state"><i class="fa-solid fa-magnifying-glass fa-2x"></i><p>No stories matched those filters.</p></div>';};$('#search-form').addEventListener('submit',event=>{event.preventDefault();run();});run();}
 function livePage(){const updates=[['14:10','Transport ministry says the project timeline remains on track.'],['13:42','Community leaders welcome the announcement and call for open dialogue.'],['13:08','Our correspondent is speaking with officials at the briefing.'],['12:30','The afternoon briefing has begun; follow verified updates below.']];$('#live-updates').innerHTML=updates.map(([time,text],index)=>`<article class="comment"><span class="badge">${index===0?'New':'Update'}</span><strong style="margin-left:8px">${time}</strong><p>${text}</p></article>`).join('');let seconds=31;setInterval(()=>{seconds=seconds===1?31:seconds-1;const element=$('#refresh-countdown');if(element)element.textContent=seconds;},1000);if(configured)subscribeRealtime('breaking_news',()=>toast('A new breaking update is available.'));}
-function mediaPage(type){const title=type==='video'?'Video News':'Photo Gallery';$('#media-title').textContent=title;$('#media-description').textContent=type==='video'?'Watch the latest publisher-provided video reports, interviews and live explainers.':'The week’s stories, through the lens of our photojournalists.';const element=$('#media-content');element.innerHTML=type==='video'?(liveVideos.length?liveVideos.map(videoCard).join(''):videoEmptyState()):gallery.concat(gallery).map(item=>`<a class="gallery-item" href="#"><img src="${esc(mediaImage(item.image))}" alt="${esc(item.title)}" loading="lazy" onerror="this.onerror=null;this.src='${fallbackImage()}'"><span>${esc(item.title)}</span></a>`).join('');}
+function mediaPage(type){
+  const title=type==='video'?'Video News':'Photo Gallery';
+  $('#media-title').textContent=title;
+  $('#media-description').textContent=type==='video'
+    ?'Watch the latest publisher-provided video reports, interviews and live explainers.'
+    :'Latest photographs from published LK Newsroom reports, updated as new stories go live.';
+  const element=$('#media-content');
+  if(type==='video'){
+    element.innerHTML=liveVideos.length?liveVideos.map(videoCard).join(''):videoEmptyState();
+    return;
+  }
+
+  // Build the gallery from the live published-news feed, not the demo gallery array.
+  // Only use genuine article images and show each image once.
+  const seenImages=new Set();
+  const photos=feed.filter(article=>{
+    const image=String(article.image||'').trim();
+    if(!image||!/^https?:\\/\\//i.test(image)||image===fallbackImage())return false;
+    const key=image.split(/[?#]/)[0].toLowerCase();
+    if(seenImages.has(key))return false;
+    seenImages.add(key);
+    return true;
+  }).sort((a,b)=>new Date(b.publishedAt||0)-new Date(a.publishedAt||0));
+
+  if(!photos.length){
+    element.innerHTML='<div class="empty-state"><i class="fa-solid fa-camera fa-2x"></i><p>No published stories with photographs are available yet. New photos will appear here automatically when image-backed stories go live.</p><a class="btn btn-outline" href="../index.html">Browse latest news</a></div>';
+    return;
+  }
+
+  element.innerHTML=photos.map((article,index)=>{
+    const href=link(`news/${encodeURIComponent(article.id)}`);
+    const source=article.source||'LK Newsroom';
+    const time=article.publishedAt?relativeTime(article.publishedAt):'';
+    const alt=article.title||'LK Newsroom photo';
+    return `<a class="gallery-item live-gallery-item${index===0?' live-gallery-item--featured':''}" href="${esc(href)}" aria-label="Read: ${esc(alt)}">
+      <img src="${esc(article.image)}" alt="${esc(alt)}" loading="${index<3?'eager':'lazy'}" onerror="this.closest('.gallery-item')?.remove()">
+      <span class="live-gallery-caption"><strong>${esc(article.title)}</strong><small>${esc(source)}${time?` · ${esc(time)}`:''}</small></span>
+    </a>`;
+  }).join('');
+}
 function staticPage(){const page=document.body.dataset.static;const pages={about:['About LK Newsroom','Independent journalism that helps people understand their world.','We are a modern newsroom built on accuracy, humanity and public service. Our team brings clear reporting and useful context to the stories that shape our communities.'],contact:['Contact us','We would like to hear from you.','For news tips, corrections, partnerships or general enquiries, email <strong>hello@lknewsroom.example</strong>. Our editorial desk reviews credible public-interest leads every day.'],privacy:['Privacy Policy','Your privacy matters to us.','We only collect information needed to deliver our service, such as newsletter sign-ups and account preferences. We do not sell your personal information.'],terms:['Terms of Use','A simple agreement for using LK Newsroom.','Content is provided for personal, non-commercial use. Please credit LK Newsroom when sharing excerpts and do not reproduce material without written permission.']};const content=pages[page]||pages.about;$('#static-title').textContent=content[0];$('#static-subtitle').textContent=content[1];$('#static-content').innerHTML=`<div class="article-body"><p>${content[2]}</p><h2>Our commitment</h2><p>We believe good journalism should be accessible, trustworthy and responsive to the people it serves. Contact our team for more information.</p></div>`;}
 document.addEventListener('DOMContentLoaded',async()=>{setTheme();initShell();void initWeather();await Promise.all([hydrateNews(),hydrateVideos(),refreshBreaking(),loadAdvertisements()]);void hydrateAdSlots();void trackPageView();connectLiveUpdates();const type=document.body.dataset.template;if(type==='home')home();if(type==='category')await categoryPage();if(type==='article')await articlePage();if(type==='search')searchPage();if(type==='live')livePage();if(type==='media')mediaPage(document.body.dataset.media);if(type==='static'){if(document.body.dataset.static==='advertise')await mountAdvertiseMarketplace();else if(document.body.dataset.static==='support')await mountSupportPage();else staticPage();}});
