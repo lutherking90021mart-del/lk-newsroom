@@ -48,6 +48,45 @@ async function requireStaff(req:StaffRequest,res:Response,next:NextFunction){
   req.userId=user.id; next();
 }
 
+// Public company-hub assistant. Configure OPENAI_API_KEY on the server to enable AI responses.
+const companyChatWindows=new Map<string,{count:number;resetAt:number}>();
+app.post('/v1/company/chat',async(req,res)=>{
+  const ip=String(req.ip||req.socket.remoteAddress||'unknown').slice(0,120);
+  const now=Date.now();
+  const window=companyChatWindows.get(ip);
+  if(!window||window.resetAt<=now)companyChatWindows.set(ip,{count:1,resetAt:now+60_000});
+  else if(window.count>=12)return res.status(429).json({error:'Please wait a moment before asking another question.'});
+  else window.count+=1;
+  const question=String(req.body?.message||'').trim().slice(0,1200);
+  if(question.length<1)return res.status(400).json({error:'Type a question first.'});
+  const apiKey=process.env.OPENAI_API_KEY;
+  if(!apiKey)return res.status(503).json({error:'AI assistant is not configured yet.'});
+  const model=process.env.OPENAI_CHAT_MODEL||'gpt-4o-mini';
+  try{
+    const response=await fetch('https://api.openai.com/v1/chat/completions',{
+      method:'POST',
+      headers:{'Authorization':`Bearer ${apiKey}`,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model,
+        temperature:0.3,
+        max_tokens:350,
+        messages:[
+          {role:'system',content:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. Advertising requests are reviewed first; customers must receive an approved quote/invoice before paying, and campaigns must not be treated as paid until payment is confirmed. Advertising requests can be submitted at pages/advertise.html on the website. Payment information currently displayed by the company: Fidelity Bank account name Martin Luther Awuzah, account number 2600778600414; Mobile Money recipient Charles Adjei, number 0557697377. Because the recipient names differ, advise users to confirm the correct recipient and amount with the company before transfer. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'},
+          {role:'user',content:question}
+        ]
+      })
+    });
+    const payload=await response.json() as {choices?:Array<{message?:{content?:string}}>;error?:{message?:string}};
+    if(!response.ok)throw new Error(payload.error?.message||'AI provider request failed');
+    const answer=String(payload.choices?.[0]?.message?.content||'').trim();
+    if(!answer)throw new Error('AI provider returned an empty response');
+    res.json({answer,mode:'ai'});
+  }catch(error){
+    console.error('Company assistant request failed:',errorMessage(error,'AI provider error'));
+    res.status(502).json({error:'The assistant is temporarily unavailable. Please contact us on WhatsApp.',handoffUrl:'https://wa.me/233559627349'});
+  }
+});
+
 app.post('/v1/admin/media/upload',requireStaff,async(req,res)=>{
   try{
     const userId=(req as StaffRequest).userId!;
