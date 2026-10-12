@@ -10,8 +10,8 @@ const inFlight = new Map<string, Promise<unknown>>();
 function cacheTtl(path: string, params: URLSearchParams) {
   if (path === '/fixtures' && params.has('live')) return 60_000;
   if (path === '/fixtures' && params.has('id')) return 5 * 60_000;
-  if (path === '/fixtures' && params.has('date')) return 10 * 60_000;
-  return 10 * 60_000;
+  if (path === '/fixtures' && params.has('date')) return 30 * 60_000;
+  return 30 * 60_000;
 }
 async function apiGet(path: string, params: URLSearchParams): Promise<unknown> {
   const key = path + '?' + params.toString();
