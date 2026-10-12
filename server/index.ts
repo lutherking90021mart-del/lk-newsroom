@@ -711,7 +711,7 @@ app.post('/v1/admin/monetization/requests/:id/payment-link',requireStaff,async(r
     const saved=await db.from('payment_transactions').insert({kind:'advertising',provider:'paystack',reference,email:request.email,amount,currency,advertiser_request_id:request.id}).select('id').single();
     if(saved.error)throw saved.error;
     try{
-      const response=await fetch('https://api.paystack.co/transaction/initialize',{method:'POST',headers:{Authorization:`Bearer ${secret}`,'Content-Type':'application/json'},body:JSON.stringify({email:request.email,amount:Math.round(amount*100),currency,reference,callback_url:advertiserPaymentReturnUrl(req,reference),metadata:{kind:'advertising',advertiserRequestId:request.id,companyName:request.company_name}})});
+      const response=await fetch('https://api.paystack.co/transaction/initialize',{method:'POST',headers:{Authorization:`Bearer ${secret}`,'Content-Type':'application/json'},body:JSON.stringify({email:request.email,amount:Math.round(amount*100),currency,reference,callback_url:advertiserPaymentReturnUrl(req,reference),channels:['card'],metadata:{kind:'advertising',advertiserRequestId:request.id,companyName:request.company_name}})});
       const payload=await response.json() as any;
       if(!response.ok||!payload.status||!payload.data?.authorization_url)throw new Error(payload.message||'Paystack could not create the payment link.');
       await db.from('payment_transactions').update({provider_response:{checkout_url:payload.data.authorization_url}}).eq('id',saved.data.id);
