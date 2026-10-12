@@ -289,3 +289,19 @@ on conflict (slug) do nothing;
 do $$ begin
   alter publication supabase_realtime add table public.advertiser_requests, public.subscriptions, public.donations;
 exception when duplicate_object then null; end $$;
+
+
+-- Approved advertising requests can be paid through Paystack Checkout.
+-- Existing donation and membership transactions remain unchanged.
+alter table public.payment_transactions
+  drop constraint if exists payment_transactions_kind_check;
+alter table public.payment_transactions
+  add constraint payment_transactions_kind_check
+  check (kind in ('donation','subscription','advertising'));
+
+alter table public.payment_transactions
+  add column if not exists advertiser_request_id uuid
+  references public.advertiser_requests(id) on delete set null;
+
+create index if not exists payment_transactions_advertiser_request_idx
+  on public.payment_transactions(advertiser_request_id, created_at desc);
