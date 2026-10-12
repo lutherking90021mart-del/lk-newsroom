@@ -97,7 +97,7 @@ app.post('/v1/admin/company/team',requireStaff,async(req,res)=>{
     const full_name=safeText(req.body?.fullName,120),job_title=safeText(req.body?.jobTitle,120),work_email=safeText(req.body?.workEmail,254).toLowerCase()||null,work_phone=safeText(req.body?.workPhone,40)||null,photo_url=safeText(req.body?.photoUrl,1000)||null,biography=safeText(req.body?.biography,500)||null,sort_order=Math.max(0,Math.min(9999,Number(req.body?.sortOrder)||100)),is_published=req.body?.isPublished===true;
     if(full_name.length<2||job_title.length<2)return res.status(400).json({error:'Full name and job title are required.'});
     if(work_email&&!/^\S+@\S+\.\S+$/.test(work_email))return res.status(400).json({error:'Enter a valid work email.'});
-    if(photo_url){try{const u=new URL(photo_url);if(u.protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}
+    if(photo_url){try{const u=new URL(photo_url);if(u.protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}
     const {data,error}=await db.from('company_staff_profiles').insert({full_name,job_title,work_email,work_phone,photo_url,biography,sort_order,is_published}).select().single();if(error)throw error;res.status(201).json({data})
   }catch(error){res.status(400).json({error:errorMessage(error,'Unable to create staff profile.')})}
 });
