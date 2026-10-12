@@ -151,7 +151,21 @@ async function categoryPage(){
   await Promise.all([loadView(),hydrateCategoryMeta()]);
   renderNewsletter($('#newsletter'));
 }
-const paragraphs=value=>String(value||'').split(/\n{2,}/).filter(Boolean).map(part=>`<p>${esc(part)}</p>`).join('');
+// Keep source paragraph breaks, and make long single-block news feeds readable by
+// grouping sentences into short paragraphs without changing the story text.
+const paragraphs=value=>{
+  const text=String(value||'').replace(/\r/g,'').trim();
+  if(!text)return '';
+  let blocks=text.split(/\n\s*\n/).map(part=>part.trim()).filter(Boolean);
+  if(blocks.length===1&&blocks[0].length>700){
+    const sentences=blocks[0].split(/(?<=[.!?])\s+(?=[A-Z“"'(])/);
+    if(sentences.length>=5){
+      blocks=[];
+      for(let i=0;i<sentences.length;i+=3)blocks.push(sentences.slice(i,i+3).join(' '));
+    }
+  }
+  return blocks.map(part=>`<p>${esc(part).replace(/\n/g,'<br>')}</p>`).join('');
+};
 const sourceMark=source=>`<span class="source-mark" title="${esc(source)}">${esc(String(source||'LK').slice(0,4).toUpperCase())}</span>`;
 async function getArticle(identifier){try{const response=await fetch(`${aggregatorApi()}/v1/news/${encodeURIComponent(identifier)}`);if(!response.ok)throw new Error(response.status===404?'This article is no longer available.':'Unable to load this article.');return response.json();}catch(error){if(configured)return newsApi.article(identifier);throw error;}}
 function mediaSection(items,type){
