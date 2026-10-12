@@ -48,6 +48,115 @@ async function requireStaff(req:StaffRequest,res:Response,next:NextFunction){
   req.userId=user.id; next();
 }
 
+// Company hub enquiries are stored privately in Supabase and exposed to staff only.
+app.post('/v1/company/enquiries',async(req,res)=>{
+  try{
+    const name=safeText(req.body?.name,120);
+    const email=safeText(req.body?.email,254).toLowerCase();
+    const topic=safeText(req.body?.topic,100)||'General enquiry';
+    const message=safeText(req.body?.message,5000);
+    if(name.length<2||!/^\S+@\S+\.\S+$/.test(email)||message.length<5)return res.status(400).json({error:'Please provide your name, a valid email and a message.'});
+    const {data,error}=await db.from('company_enquiries').insert({name,email,topic,message,status:'new'}).select('id,created_at').single();
+    if(error)throw error;
+    res.status(201).json({ok:true,id:data.id,createdAt:data.created_at,message:'Your enquiry has been sent to the LK Newsroom team.'});
+  }catch(error){console.error('Company enquiry save failed:',errorMessage(error,'database error'));res.status(503).json({error:'We could not save your enquiry right now. Please email lutherking90021mart@gmail.com or use WhatsApp.'});}
+});
+app.get('/v1/admin/company/enquiries',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;
+    if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const status=String(req.query.status||'all');
+    let query=db.from('company_enquiries').select('id,name,email,topic,message,status,admin_notes,created_at,updated_at,handled_by').order('created_at',{ascending:false}).limit(200);
+    if(['new','in_progress','resolved','spam'].includes(status))query=query.eq('status',status);
+    const {data,error}=await query;if(error)throw error;res.json({data:data||[]});
+  }catch(error){res.status(500).json({error:errorMessage(error,'Unable to load enquiries.')});}
+});
+app.patch('/v1/admin/company/enquiries/:id',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;
+    if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid enquiry ID.'});
+    const status=String(req.body?.status||'');
+    if(!['new','in_progress','resolved','spam'].includes(status))return res.status(400).json({error:'Invalid enquiry status.'});
+    const {data,error}=await db.from('company_enquiries').update({status,admin_notes:safeText(req.body?.adminNotes,2000)||null,handled_by:userId,updated_at:new Date().toISOString()}).eq('id',req.params.id).select('id,status,admin_notes,handled_by,updated_at').single();
+    if(error)throw error;res.json({data});
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to update enquiry.')});}
+});
+
+app.get('/v1/company/team',async(_req,res)=>{
+  try{const {data,error}=await db.from('company_staff_profiles').select('id,full_name,job_title,work_email,work_phone,photo_url,biography,sort_order').eq('is_published',true).order('sort_order').order('full_name');if(error)throw error;res.json({data:data||[]})}
+  catch(error){res.status(503).json({error:'Team profiles are temporarily unavailable.',data:[]})}
+});
+app.get('/v1/admin/company/team',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});const {data,error}=await db.from('company_staff_profiles').select('*').order('sort_order').order('full_name');if(error)throw error;res.json({data:data||[]})}
+  catch(error){res.status(500).json({error:errorMessage(error,'Unable to load team profiles.')})}
+});
+app.post('/v1/admin/company/team',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});
+    const full_name=safeText(req.body?.fullName,120),job_title=safeText(req.body?.jobTitle,120),work_email=safeText(req.body?.workEmail,254).toLowerCase()||null,work_phone=safeText(req.body?.workPhone,40)||null,photo_url=safeText(req.body?.photoUrl,1000)||null,biography=safeText(req.body?.biography,500)||null,sort_order=Math.max(0,Math.min(9999,Number(req.body?.sortOrder)||100)),is_published=req.body?.isPublished===true;
+    if(full_name.length<2||job_title.length<2)return res.status(400).json({error:'Full name and job title are required.'});
+    if(work_email&&!/^\S+@\S+\.\S+$/.test(work_email))return res.status(400).json({error:'Enter a valid work email.'});
+    if(photo_url){try{const u=new URL(photo_url);if(u.protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}
+    const {data,error}=await db.from('company_staff_profiles').insert({full_name,job_title,work_email,work_phone,photo_url,biography,sort_order,is_published}).select().single();if(error)throw error;res.status(201).json({data})
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to create staff profile.')})}
+});
+app.patch('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
+  try{
+    const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid profile ID.'});
+    const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
+    if(req.body?.fullName!==undefined)patch.full_name=safeText(req.body.fullName,120);
+    if(req.body?.jobTitle!==undefined)patch.job_title=safeText(req.body.jobTitle,120);
+    if(req.body?.workEmail!==undefined){const v=safeText(req.body.workEmail,254).toLowerCase();if(v&&!/^\S+@\S+\.\S+$/.test(v))return res.status(400).json({error:'Enter a valid work email.'});patch.work_email=v||null;}
+    if(req.body?.workPhone!==undefined)patch.work_phone=safeText(req.body.workPhone,40)||null;
+    if(req.body?.photoUrl!==undefined){const v=safeText(req.body.photoUrl,1000);if(v){try{if(new URL(v).protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}patch.photo_url=v||null;}
+    if(req.body?.biography!==undefined)patch.biography=safeText(req.body.biography,500)||null;
+    if(req.body?.sortOrder!==undefined)patch.sort_order=Math.max(0,Math.min(9999,Number(req.body.sortOrder)||0));
+    if(req.body?.isPublished!==undefined)patch.is_published=req.body.isPublished===true;
+    if(patch.full_name===''||patch.job_title==='')return res.status(400).json({error:'Name and job title cannot be empty.'});
+    const {data,error}=await db.from('company_staff_profiles').update(patch).eq('id',req.params.id).select().single();if(error)throw error;res.json({data})
+  }catch(error){res.status(400).json({error:errorMessage(error,'Unable to update staff profile.')})}
+});
+app.delete('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
+  try{const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid profile ID.'});const {error}=await db.from('company_staff_profiles').delete().eq('id',req.params.id);if(error)throw error;res.json({ok:true})}
+  catch(error){res.status(400).json({error:errorMessage(error,'Unable to delete staff profile.')})}
+});
+
+// Public company-hub assistant. Configure GEMINI_API_KEY on the server to enable AI responses.
+const companyChatWindows=new Map<string,{count:number;resetAt:number}>();
+app.post('/v1/company/chat',async(req,res)=>{
+  const ip=String(req.ip||req.socket.remoteAddress||'unknown').slice(0,120);
+  const now=Date.now();
+  const window=companyChatWindows.get(ip);
+  if(!window||window.resetAt<=now)companyChatWindows.set(ip,{count:1,resetAt:now+60_000});
+  else if(window.count>=12)return res.status(429).json({error:'Please wait a moment before asking another question.'});
+  else window.count+=1;
+  const question=String(req.body?.message||'').trim().slice(0,1200);
+  if(question.length<1)return res.status(400).json({error:'Type a question first.'});
+  const apiKey=process.env.GEMINI_API_KEY;
+  if(!apiKey)return res.status(503).json({error:'AI assistant is not configured yet.'});
+  const model=process.env.GEMINI_CHAT_MODEL||'gemini-2.5-flash';
+  try{
+    const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        systemInstruction:{parts:[{text:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. Advertising requests are reviewed first; customers must receive an approved quote/invoice before paying, and campaigns must not be treated as paid until payment is confirmed. Advertising requests can be submitted at pages/advertise.html on the website. Payment information currently displayed by the company: Fidelity Bank account name Martin Luther Awuzah, account number 2600778600414; Mobile Money recipient Charles Adjei, number 0557697377. Because the recipient names differ, advise users to confirm the correct recipient and amount with the company before transfer. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'}]},
+        contents:[{role:'user',parts:[{text:question}]}],
+        generationConfig:{temperature:0.3,maxOutputTokens:350}
+      })
+    });
+    const payload=await response.json() as {candidates?:Array<{content?:{parts?:Array<{text?:string}>}}>;error?:{message?:string}};
+    if(!response.ok)throw new Error(payload.error?.message||'AI provider request failed');
+    const answer=String(payload.candidates?.[0]?.content?.parts?.map(part=>part.text||'').join('')||'').trim();
+    if(!answer)throw new Error('AI provider returned an empty response');
+    res.json({answer,mode:'ai'});
+  }catch(error){
+    console.error('Company assistant request failed:',errorMessage(error,'AI provider error'));
+    res.status(502).json({error:'The assistant is temporarily unavailable. Please contact us on WhatsApp.',handoffUrl:'https://wa.me/233559627349'});
+  }
+});
+
 app.post('/v1/admin/media/upload',requireStaff,async(req,res)=>{
   try{
     const userId=(req as StaffRequest).userId!;
