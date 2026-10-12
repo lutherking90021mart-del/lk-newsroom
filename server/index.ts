@@ -122,7 +122,7 @@ app.delete('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
   catch(error){res.status(400).json({error:errorMessage(error,'Unable to delete staff profile.')})}
 });
 
-// Public company-hub assistant. Configure OPENAI_API_KEY on the server to enable AI responses.
+// Public company-hub assistant. Configure GEMINI_API_KEY on the server to enable AI responses.
 const companyChatWindows=new Map<string,{count:number;resetAt:number}>();
 app.post('/v1/company/chat',async(req,res)=>{
   const ip=String(req.ip||req.socket.remoteAddress||'unknown').slice(0,120);
@@ -133,26 +133,22 @@ app.post('/v1/company/chat',async(req,res)=>{
   else window.count+=1;
   const question=String(req.body?.message||'').trim().slice(0,1200);
   if(question.length<1)return res.status(400).json({error:'Type a question first.'});
-  const apiKey=process.env.OPENAI_API_KEY;
+  const apiKey=process.env.GEMINI_API_KEY;
   if(!apiKey)return res.status(503).json({error:'AI assistant is not configured yet.'});
-  const model=process.env.OPENAI_CHAT_MODEL||'gpt-4o-mini';
+  const model=process.env.GEMINI_CHAT_MODEL||'gemini-2.5-flash';
   try{
-    const response=await fetch('https://api.openai.com/v1/chat/completions',{
+    const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,{
       method:'POST',
-      headers:{'Authorization':`Bearer ${apiKey}`,'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model,
-        temperature:0.3,
-        max_tokens:350,
-        messages:[
-          {role:'system',content:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. Advertising requests are reviewed first; customers must receive an approved quote/invoice before paying, and campaigns must not be treated as paid until payment is confirmed. Advertising requests can be submitted at pages/advertise.html on the website. Payment information currently displayed by the company: Fidelity Bank account name Martin Luther Awuzah, account number 2600778600414; Mobile Money recipient Charles Adjei, number 0557697377. Because the recipient names differ, advise users to confirm the correct recipient and amount with the company before transfer. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'},
-          {role:'user',content:question}
-        ]
+        systemInstruction:{parts:[{text:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. Advertising requests are reviewed first; customers must receive an approved quote/invoice before paying, and campaigns must not be treated as paid until payment is confirmed. Advertising requests can be submitted at pages/advertise.html on the website. Payment information currently displayed by the company: Fidelity Bank account name Martin Luther Awuzah, account number 2600778600414; Mobile Money recipient Charles Adjei, number 0557697377. Because the recipient names differ, advise users to confirm the correct recipient and amount with the company before transfer. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'}]},
+        contents:[{role:'user',parts:[{text:question}]}],
+        generationConfig:{temperature:0.3,maxOutputTokens:350}
       })
     });
-    const payload=await response.json() as {choices?:Array<{message?:{content?:string}}>;error?:{message?:string}};
+    const payload=await response.json() as {candidates?:Array<{content?:{parts?:Array<{text?:string}>}}>;error?:{message?:string}};
     if(!response.ok)throw new Error(payload.error?.message||'AI provider request failed');
-    const answer=String(payload.choices?.[0]?.message?.content||'').trim();
+    const answer=String(payload.candidates?.[0]?.content?.parts?.map(part=>part.text||'').join('')||'').trim();
     if(!answer)throw new Error('AI provider returned an empty response');
     res.json({answer,mode:'ai'});
   }catch(error){
