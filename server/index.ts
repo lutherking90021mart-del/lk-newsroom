@@ -455,11 +455,36 @@ app.get('/v1/news',async(req,res)=>{
   res.json({data,total:count||0,offset,limit,updatedAt:new Date().toISOString()});
 });
 
+function videoDedupeKey(value:unknown){
+  return String(value||'').toLowerCase().replace(/https?:\\/\\/(?:www\\.)?youtube\\.com\\/watch\\?v=([^&]+).*/,'youtube:$1').replace(/https?:\\/\\/youtu\\.be\\/([^?&/]+).*/,'youtube:$1');
+}
+function videoTitleTokens(value:unknown){
+  return new Set(String(value||'').toLowerCase().replace(/[^a-z0-9\\s]/g,' ').split(/\\s+/).filter(word=>word.length>2&&!['the','and','for','with','from','says','said','news','video','live','what','how','why','after','over','into','while','both'].includes(word)));
+}
+function duplicateVideo(a:any,b:any){
+  const aUrl=videoDedupeKey(a.youtube_url||a.video_url),bUrl=videoDedupeKey(b.youtube_url||b.video_url);
+  if(aUrl&&bUrl&&aUrl===bUrl)return true;
+  const sourceA=String(a.articles?.news_sources?.slug||a.articles?.news_sources?.name||'').toLowerCase();
+  const sourceB=String(b.articles?.news_sources?.slug||b.articles?.news_sources?.name||'').toLowerCase();
+  if(!sourceA||sourceA!==sourceB)return false;
+  const timeA=new Date(a.published_at||a.created_at||0).getTime(),timeB=new Date(b.published_at||b.created_at||0).getTime();
+  if(Number.isFinite(timeA)&&Number.isFinite(timeB)&&Math.abs(timeA-timeB)>72*60*60*1000)return false;
+  const ta=videoTitleTokens(a.title),tb=videoTitleTokens(b.title);
+  if(!ta.size||!tb.size)return false;
+  const intersection=[...ta].filter(word=>tb.has(word)).length;
+  return intersection/Math.min(ta.size,tb.size)>=0.78;
+}
 app.get('/v1/videos',async(req,res)=>{
   const limit=Math.min(Math.max(Number(req.query.limit)||12,1),48);
-  const {data,error}=await db.from('videos').select('id,title,description,video_url,youtube_url,thumbnail_url,duration_seconds,published_at,created_at,articles(news_sources(name,slug))').eq('status','published').order('published_at',{ascending:false}).limit(limit);
+  const {data,error}=await db.from('videos').select('id,title,description,video_url,youtube_url,thumbnail_url,duration_seconds,published_at,created_at,articles(news_sources(name,slug))').eq('status','published').order('published_at',{ascending:false}).limit(Math.min(limit*8,300));
   if(error)return res.status(500).json({error:error.message});
-  res.json({data:data||[],updatedAt:new Date().toISOString()});
+  const unique:any[]=[];
+  for(const video of data||[]){
+    if(unique.some(existing=>duplicateVideo(existing,video)))continue;
+    unique.push(video);
+    if(unique.length>=limit)break;
+  }
+  res.json({data:unique,updatedAt:new Date().toISOString()});
 });
 
 app.get('/v1/news/:identifier',async(req,res)=>{
