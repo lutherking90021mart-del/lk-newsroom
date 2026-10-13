@@ -54,12 +54,12 @@ footballApiRouter.get('/fixtures', async (req: Request, res: Response) => {
     const date = String(req.query.date || '');
     if (!liveOnly && !/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return res.status(400).json({ error: 'Provide live=all or a date in YYYY-MM-DD format.' });
     const dates = liveOnly ? [new Date().toISOString().slice(0,10)] : [date];
-    const scoreboards = await Promise.all(dates.flatMap(d => LEAGUES.map(async league => {
+    const scoreboards = await Promise.allSettled(dates.flatMap(d => LEAGUES.map(async league => {
       const compactDate = d.replaceAll('-', '');
       const data = await espnGet('/' + league.id + '/scoreboard?dates=' + compactDate);
       return (data.events || []).map((event: any) => toFixture(event, league));
     })));
-    let response = scoreboards.flat();
+    let response = scoreboards.flatMap(result => result.status === 'fulfilled' ? result.value : []);
     if (liveOnly) response = response.filter(item => ['LIVE','HT'].includes(item.fixture.status.short));
     response.sort((a,b) => new Date(a.fixture.date || 0).getTime() - new Date(b.fixture.date || 0).getTime());
     res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
