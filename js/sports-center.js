@@ -63,6 +63,35 @@ function scoreCard(match) {
 let allMatches = [];
 let activeLeague = 'all';
 let fetching = false;
+
+async function refreshTransferNews() {
+  const grid = document.querySelector('#transfer-news-feed');
+  if (!grid) return;
+  const escapeHtml = value => safe(value);
+  try {
+    const response = await fetch('/v1/news?category=sports&limit=12', {headers:{Accept:'application/json'}});
+    if (!response.ok) throw new Error('Transfer stories unavailable');
+    const payload = await response.json();
+    const rows = (payload.data || []).filter(article => article && article.title);
+    const transferRows = rows.filter(article => {
+      const text = String(article.title || '') + ' ' + String(article.excerpt || article.ai_summary || '');
+      const source = String(article.news_sources?.slug || article.source_slug || '');
+      return /transfer|signs? for|signed|signing|loan deal|agreed deal|here we go|contract extension|joins? the club|set to join|bid accepted/i.test(text) || source === 'fabrizio-romano-x';
+    });
+    const selected = (transferRows.length ? transferRows : rows).slice(0,6);
+    grid.innerHTML = selected.length ? selected.map(article => {
+      const title = escapeHtml(article.title);
+      const summary = escapeHtml(article.excerpt || article.ai_summary || article.content || '');
+      const source = escapeHtml(article.news_sources?.name || article.source || 'LK Newsroom');
+      const image = article.featured_image_url || article.image_url || '';
+      const link = '/news/' + encodeURIComponent(article.id || article.slug || '');
+      return '<article class="news-card"><a class="news-card__image" href="' + link + '">' + (image ? '<img src="' + escapeHtml(image) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">' : '') + '</a><div class="news-card__body"><span class="eyebrow">' + source + '</span><h3 class="headline"><a href="' + link + '">' + title + '</a></h3><p>' + summary.slice(0,190) + (summary.length>190?'…':'') + '</p></div></article>';
+    }).join('') : '<p class="scores-empty">Transfer stories will appear here as they are published by our news sources.</p>';
+  } catch {
+    grid.innerHTML = '<p class="scores-empty">Transfer stories are temporarily unavailable. Please check back shortly.</p>';
+  }
+}
+
 function renderScores() {
   const full = document.querySelector('#sports-live-scores');
   const home = document.querySelector('#home-live-scores');
@@ -112,4 +141,5 @@ document.addEventListener('click', event => {
   renderScores();
 });
 refreshScores();
+  refreshTransferNews();
 window.setInterval(refreshScores, 60000);
