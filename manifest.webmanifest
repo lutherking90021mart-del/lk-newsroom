@@ -1,0 +1,24 @@
+{
+  "id": "/",
+  "name": "LK Newsroom",
+  "short_name": "LK News",
+  "description": "Latest Ghana, Africa and world news, sports, business and entertainment from LK Newsroom.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#003366",
+  "categories": [
+    "news",
+    "magazines"
+  ],
+  "icons": [
+    {
+      "src": "/assets/lk-newsroom-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
