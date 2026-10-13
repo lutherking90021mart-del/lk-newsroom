@@ -28,5 +28,16 @@ export const videoProviders:NewsProvider[]=[
   youtubeChannelProvider({slug:'bbc-news-video',name:'BBC News Video',channelId:process.env.BBC_NEWS_YOUTUBE_CHANNEL_ID||'UC16niRr50-MSBwiO3YDb3RA',country:'United Kingdom',category:'World'}),
   youtubeChannelProvider({slug:'reuters-video',name:'Reuters Video',channelId:process.env.REUTERS_YOUTUBE_CHANNEL_ID||'UChqUTb7kYRX8-EiaN3XFrSQ',country:'International',category:'World'}),
   youtubeChannelProvider({slug:'al-jazeera-video',name:'Al Jazeera Video',channelId:process.env.ALJAZEERA_YOUTUBE_CHANNEL_ID||'UCNye-wNBqNL5ZzHSJj3l8Bg',country:'Qatar',category:'World'}),
-  youtubeChannelProvider({slug:'sky-news-video',name:'Sky News Video',channelId:process.env.SKY_NEWS_YOUTUBE_CHANNEL_ID||'UCoMdktPbSTixAyNGwb-UYkQ',country:'United Kingdom',category:'World'})
+  youtubeChannelProvider({slug:'sky-news-video',name:'Sky News Video',channelId:process.env.SKY_NEWS_YOUTUBE_CHANNEL_ID||'UCoMdktPbSTixAyNGwb-UYkQ',country:'United Kingdom',category:'World'}),
+  ...([
+    {slug:'espn-sports-video',name:'ESPN Sports Video',channelId:process.env.ESPN_SPORTS_YOUTUBE_CHANNEL_ID,country:'United States',category:'Sports' as const},
+    {slug:'fifa-video',name:'FIFA Video',channelId:process.env.FIFA_YOUTUBE_CHANNEL_ID,country:'International',category:'Sports' as const},
+    {slug:'sky-sports-video',name:'Sky Sports Video',channelId:process.env.SKY_SPORTS_YOUTUBE_CHANNEL_ID,country:'United Kingdom',category:'Sports' as const},
+    {slug:'bbc-entertainment-video',name:'BBC Entertainment Video',channelId:process.env.BBC_ENTERTAINMENT_YOUTUBE_CHANNEL_ID,country:'United Kingdom',category:'Entertainment' as const},
+    {slug:'variety-video',name:'Variety Video',channelId:process.env.VARIETY_YOUTUBE_CHANNEL_ID,country:'United States',category:'Entertainment' as const},
+    {slug:'bloomberg-video',name:'Bloomberg Video',channelId:process.env.BLOOMBERG_YOUTUBE_CHANNEL_ID,country:'International',category:'Business' as const},
+    {slug:'cnbc-video',name:'CNBC Video',channelId:process.env.CNBC_YOUTUBE_CHANNEL_ID,country:'United States',category:'Business' as const},
+    {slug:'france24-video',name:'France 24 Video',channelId:process.env.FRANCE24_YOUTUBE_CHANNEL_ID,country:'France',category:'World' as const},
+    {slug:'ap-video',name:'Associated Press Video',channelId:process.env.AP_YOUTUBE_CHANNEL_ID,country:'United States',category:'World' as const}
+  ] as Channel[]).filter(channel=>Boolean(channel.channelId)).map(youtubeChannelProvider)
 ];
