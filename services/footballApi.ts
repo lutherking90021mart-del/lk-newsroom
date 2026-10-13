@@ -68,7 +68,7 @@ footballApiRouter.get('/fixtures', async (req: Request, res: Response) => {
 });
 footballApiRouter.get('/fixture/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id || '');
-  if (!/^\\d{1,20}$/.test(id)) return res.status(400).json({ error: 'Invalid match ID.' });
+  if (!/^\d{1,20}$/.test(id)) return res.status(400).json({ error: 'Invalid match ID.' });
   try {
     const summaries = await Promise.allSettled(LEAGUES.map(async league => {
       const data = await espnGet('/' + league.id + '/summary?event=' + encodeURIComponent(id));
