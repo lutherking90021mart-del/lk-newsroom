@@ -241,5 +241,43 @@ function mediaPage(type){
     </a>`;
   }).join('');
 }
-function staticPage(){const page=document.body.dataset.static;const pages={about:['About LK Newsroom','Independent journalism that helps people understand their world.','We are a modern newsroom built on accuracy, humanity and public service. Our team brings clear reporting and useful context to the stories that shape our communities.'],contact:['Contact us','We would like to hear from you.','For news tips, corrections, partnerships or general enquiries, email <strong>hello@lknewsroom.example</strong>. Our editorial desk reviews credible public-interest leads every day.'],privacy:['Privacy Policy','Your privacy matters to us.','We only collect information needed to deliver our service, such as newsletter sign-ups and account preferences. We do not sell your personal information.'],terms:['Terms of Use','A simple agreement for using LK Newsroom.','Content is provided for personal, non-commercial use. Please credit LK Newsroom when sharing excerpts and do not reproduce material without written permission.']};const content=pages[page]||pages.about;$('#static-title').textContent=content[0];$('#static-subtitle').textContent=content[1];$('#static-content').innerHTML=`<div class="article-body"><p>${content[2]}</p><h2>Our commitment</h2><p>We believe good journalism should be accessible, trustworthy and responsive to the people it serves. Contact our team for more information.</p></div>`;}
+function staticPage(){
+  const page=document.body.dataset.static;
+  const pages={
+    about:{
+      title:'About LK Newsroom',
+      subtitle:'Ghanaian perspectives. African stories. Global context.',
+      html:`<div class="article-body about-content">
+        <p class="about-lead"><strong>LK Newsroom Global</strong> is a digital news and media platform focused on helping readers follow the stories shaping Ghana, Africa and the wider world. Our tagline is <strong>Informing Today, Inspiring Tomorrow.</strong></p>
+        <h2>Who we are</h2>
+        <p>LK Newsroom brings news, updates and context together in one accessible online destination. We cover public affairs and everyday issues that matter to readers, from Ghanaian communities and institutions to developments across Africa and international events.</p>
+        <p>Our coverage includes politics, business, technology, education, health, sports, entertainment and other topics of public interest. We aim to make important developments easier to follow through clear headlines, useful summaries and links to relevant reporting.</p>
+        <h2>Our mission</h2>
+        <p>Our mission is to inform readers with timely, understandable and responsibly presented news. We want people to have the context they need to understand what is happening, why it matters and what may happen next.</p>
+        <h2>Our editorial approach</h2>
+        <ul>
+          <li><strong>Accuracy first:</strong> We aim to check claims against credible sources and avoid presenting unverified claims as established facts.</li>
+          <li><strong>Clear attribution:</strong> When a story draws on an external publisher, statement or report, we aim to identify the source and link to it where available.</li>
+          <li><strong>Context matters:</strong> We aim to explain the background and public significance of important developments, not just repeat a headline.</li>
+          <li><strong>Fairness and responsibility:</strong> We aim to represent issues carefully, distinguish fact from opinion, and avoid misleading or sensational presentation.</li>
+          <li><strong>Corrections and feedback:</strong> If you believe a published item contains a factual error, contact us with the article link and supporting details so the team can review it.</li>
+        </ul>
+        <h2>How our coverage works</h2>
+        <p>LK Newsroom publishes and curates news content across a range of subjects. Depending on the story, coverage may include newsroom material, summaries and reporting from external publishers, official announcements, and other attributed sources. We encourage readers to follow the source links provided and to contact us when something needs clarification.</p>
+        <h2>Get in touch</h2>
+        <p>News tips, corrections, feedback and partnership enquiries are welcome. Email <a href="mailto:lutherking90021mart@gmail.com">lutherking90021mart@gmail.com</a> or contact the team on WhatsApp at <a href="https://wa.me/233559627349" target="_blank" rel="noopener noreferrer">+233 55 962 7349</a>.</p>
+        <p>Follow our official updates on <a href="https://www.instagram.com/lk.news.global/" target="_blank" rel="noopener noreferrer">Instagram</a>, <a href="https://www.facebook.com/profile.php?id=61570722200277" target="_blank" rel="noopener noreferrer">Facebook</a>, <a href="https://www.tiktok.com/@lk.news.global1" target="_blank" rel="noopener noreferrer">TikTok</a> and <a href="https://www.threads.com/@lk.news.global" target="_blank" rel="noopener noreferrer">Threads</a>.</p>
+        <p><strong>LK Newsroom Global — Informing Today, Inspiring Tomorrow.</strong></p>
+      </div>`
+    },
+    contact:{title:'Contact us',subtitle:'We would like to hear from you.',html:`<div class="article-body"><p>For news tips, corrections, partnerships or general enquiries, email <a href="mailto:lutherking90021mart@gmail.com">lutherking90021mart@gmail.com</a> or contact the team on WhatsApp at <a href="https://wa.me/233559627349" target="_blank" rel="noopener noreferrer">+233 55 962 7349</a>.</p><h2>Our commitment</h2><p>We aim to respond to genuine enquiries as soon as practical. Please include the relevant article link when reporting a possible factual error.</p></div>`},
+    privacy:{title:'Privacy Policy',subtitle:'Your privacy matters to us.',html:`<div class="article-body"><p>We aim to collect only information needed to provide and improve LK Newsroom services, such as newsletter sign-ups and account preferences. For privacy questions, contact <a href="mailto:lutherking90021mart@gmail.com">lutherking90021mart@gmail.com</a>.</p><h2>Our commitment</h2><p>We believe readers should be able to understand how their information is used. Please contact us if you have a question about a privacy matter.</p></div>`},
+    terms:{title:'Terms of Use',subtitle:'Guidance for using LK Newsroom.',html:`<div class="article-body"><p>LK Newsroom content is provided for general information. Please credit LK Newsroom when sharing excerpts and seek permission before reproducing substantial portions of our material.</p><h2>Our commitment</h2><p>We aim to provide clear, useful information and welcome questions about content use at <a href="mailto:lutherking90021mart@gmail.com">lutherking90021mart@gmail.com</a>.</p></div>`}
+  };
+  const content=pages[page]||pages.about;
+  const title=$('#static-title'),subtitle=$('#static-subtitle'),target=$('#static-content');
+  if(title)title.textContent=content.title;
+  if(subtitle)subtitle.textContent=content.subtitle;
+  if(target)target.innerHTML=content.html;
+}
 document.addEventListener('DOMContentLoaded',async()=>{setTheme();initShell();void initWeather();await Promise.all([hydrateNews(),hydrateVideos(),refreshBreaking(),loadAdvertisements()]);void hydrateAdSlots();void trackPageView();connectLiveUpdates();const type=document.body.dataset.template;if(type==='home')home();if(type==='category')await categoryPage();if(type==='article')await articlePage();if(type==='search')searchPage();if(type==='live')livePage();if(type==='media')mediaPage(document.body.dataset.media);if(type==='static'){if(document.body.dataset.static==='advertise')await mountAdvertiseMarketplace();else if(document.body.dataset.static==='support')await mountSupportPage();else staticPage();}});
