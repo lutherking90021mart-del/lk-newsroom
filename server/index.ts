@@ -239,12 +239,6 @@ function nextFiveMinutes(){return new Date((Math.floor(Date.now()/300_000)+1)*30
 const escHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!));
 const escXml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
 function publicOrigin(_req:Request){return 'https://lknewsroom.online';}
-  const configured=process.env.PUBLIC_ORIGIN?.split(',')[0]?.trim();
-  // Railway's generated hostname must never leak into canonical URLs or the sitemap.
-  const candidate=configured||`${req.protocol}://${req.get('host')}`;
-  try{if(new URL(candidate).hostname.endsWith('.railway.app'))return 'https://lknewsroom.online';}catch{}
-  return (candidate||'https://lknewsroom.online').replace(/\/$/,'');
-}
 function plainText(value:unknown){return String(value??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();}
 const analyticsRateLimit=new Map<string,{count:number;resetAt:number}>();
 const analyticsEventNames=new Set(['page_view','article_open','scroll_depth','page_exit','social_share','ad_impression','ad_click']);
