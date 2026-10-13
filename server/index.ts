@@ -238,7 +238,7 @@ function scopeCategoryArticles(query:any,slug:string,category:{id:string}|null){
 function nextFiveMinutes(){return new Date((Math.floor(Date.now()/300_000)+1)*300_000).toISOString();}
 const escHtml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!));
 const escXml=(value:unknown)=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
-function publicOrigin(req:Request){
+function publicOrigin(_req:Request){return 'https://lknewsroom.online';}
   const configured=process.env.PUBLIC_ORIGIN?.split(',')[0]?.trim();
   // Railway's generated hostname must never leak into canonical URLs or the sitemap.
   const candidate=configured||`${req.protocol}://${req.get('host')}`;
