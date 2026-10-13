@@ -78,8 +78,16 @@ footballApiRouter.get('/fixture/:id', async (req: Request, res: Response) => {
       const header = data.header || {};
       const event = header.competitions?.[0] ? header : data.events?.[0] || data.gameInfo?.event;
       if (!event || (event.id && String(event.id) !== id)) return null;
-      const fixture = toFixture(event, league);
       const competition = event.competitions?.[0] || {};
+      // ESPN's summary endpoint places live status inside competitions[0].status,
+      // while the scoreboard endpoint exposes it at the event level.
+      const normalizedEvent = {
+        ...event,
+        id: event.id || id,
+        date: event.date || competition.date || null,
+        status: event.status || competition.status || {}
+      };
+      const fixture = toFixture(normalizedEvent, league);
       const plays = data.plays || [];
       fixture.events = plays.map((play: any) => {
         const displayClock = play.clock?.displayValue || play.clock?.displayClock || '';
