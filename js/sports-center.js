@@ -68,10 +68,10 @@ function renderScores() {
   const home = document.querySelector('#home-live-scores');
   const matches = (activeLeague === 'all' ? allMatches : allMatches.filter(match => match.leagueId === activeLeague))
     .sort((a,b) => Number(b.status.live)-Number(a.status.live) || new Date(a.date)-new Date(b.date));
-  if (full) full.innerHTML = matches.length ? matches.map(scoreCard).join('') : '<p class="scores-empty">There are no live football matches right now. Check back during match time.</p>';
+  if (full) full.innerHTML = matches.length ? matches.map(scoreCard).join('') : '<p class="scores-empty">No football fixtures found for yesterday, today or tomorrow. Please try again shortly.</p>';
   if (home) {
     const featured = [...allMatches].sort((a,b) => Number(b.status.live)-Number(a.status.live) || new Date(a.date)-new Date(b.date)).slice(0,4);
-    home.innerHTML = featured.length ? featured.map(scoreCard).join('') : '<p class="scores-empty">No fixtures available right now. Check back for updates.</p>';
+    home.innerHTML = featured.length ? featured.map(scoreCard).join('') : '<p class="scores-empty">No fixtures found for yesterday, today or tomorrow.</p>';
   }
 }
 async function fetchDate(date) {
