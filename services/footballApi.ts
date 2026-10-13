@@ -67,5 +67,47 @@ footballApiRouter.get('/fixtures', async (req: Request, res: Response) => {
   } catch (error) { sendError(res, error); }
 });
 footballApiRouter.get('/fixture/:id', async (req: Request, res: Response) => {
-  res.status(501).json({ error: 'Detailed match-centre data is not available from the scoreboard feed yet.' });
+  const id = String(req.params.id || '');
+  if (!/^\\d{1,20}$/.test(id)) return res.status(400).json({ error: 'Invalid match ID.' });
+  try {
+    const summaries = await Promise.allSettled(LEAGUES.map(async league => {
+      const data = await espnGet('/' + league.id + '/summary?event=' + encodeURIComponent(id));
+      const header = data.header || {};
+      const event = header.competitions?.[0] ? header : data.events?.[0] || data.gameInfo?.event;
+      if (!event) return null;
+      const fixture = toFixture(event, league);
+      const competition = event.competitions?.[0] || {};
+      const competitors = competition.competitors || [];
+      const home = competitors.find((team: any) => team.homeAway === 'home') || competitors[0] || {};
+      const away = competitors.find((team: any) => team.homeAway === 'away') || competitors[1] || {};
+      const plays = data.plays || [];
+      fixture.events = plays.map((play: any) => ({
+        time: { elapsed: play.period?.number != null ? play.period.number : null, extra: null },
+        type: play.type?.text || play.type?.name || 'Match event',
+        detail: play.text || play.shortText || '',
+        team: { name: play.team?.displayName || '' },
+        player: { name: play.participants?.[0]?.athlete?.displayName || '' },
+        assist: { name: '' }
+      }));
+      const box = data.boxscore || {};
+      fixture.statistics = (box.teams || []).map((team: any) => ({
+        team: { id: team.team?.id || null, name: team.team?.displayName || '' },
+        statistics: (team.statistics || []).map((stat: any) => ({ type: stat.name || stat.label, value: stat.displayValue ?? stat.value ?? null }))
+      }));
+      const lineups = (box.players || []).flatMap((group: any) => (group.statistics || []).map((category: any) => ({
+        team: { name: group.team?.displayName || '' },
+        formation: '',
+        startXI: (category.athletes || []).map((entry: any) => ({ player: { name: entry.athlete?.displayName || entry.athlete?.fullName || 'Player', number: entry.athlete?.jersey || '', pos: entry.athlete?.position?.abbreviation || '' } })),
+        substitutes: []
+      })));
+      fixture.lineups = lineups;
+      return fixture;
+    }));
+    const fixture = summaries.find(result => result.status === 'fulfilled' && result.value)?.status === 'fulfilled'
+      ? (summaries.find(result => result.status === 'fulfilled' && result.value) as PromiseFulfilledResult<any>).value
+      : null;
+    if (!fixture) return res.status(404).json({ error: 'Match details were not found in the available competitions.' });
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+    res.json({ get: '/summary?event=' + id, results: 1, response: [fixture] });
+  } catch (error) { sendError(res, error); }
 });
