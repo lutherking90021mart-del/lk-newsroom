@@ -893,6 +893,9 @@ app.get('/news/:identifier',async(req,res)=>{
   try{const article=await articleByIdentifier(req.params.identifier);if(!article)return res.status(404).sendFile(`${process.cwd()}/404.html`);res.type('html').send(await articleDocument(req,article));}
   catch{res.status(500).sendFile(`${process.cwd()}/pages/article.html`);}
 });
+// Clean, memorable homepage URL; keep the root URL working too.
+app.get('/home',(_req,res)=>res.sendFile(`${process.cwd()}/index.html`));
+app.get('/index.html',(_req,res)=>res.redirect(301,'/home'));
 // Each desk has its own stable URL, while a single reusable page loads the selected category.
 app.get('/category/:slug',(_req,res)=>res.sendFile(`${process.cwd()}/pages/category.html`));
 const port=Number(process.env.PORT||5173);
