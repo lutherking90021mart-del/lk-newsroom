@@ -70,8 +70,12 @@ footballApiRouter.get('/fixture/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id || '');
   const requestedLeague = String(req.query.league || '');
   if (!/^\\d{1,20}$/.test(id)) return res.status(400).json({ error: 'Invalid match ID.' });
-  const leagues = requestedLeague ? LEAGUES.filter(league => league.id === requestedLeague) : LEAGUES;
-  if (!leagues.length) return res.status(400).json({ error: 'Unknown football competition.' });
+  const preferred = LEAGUES.find(league => league.id === requestedLeague);
+  // The score card can occasionally carry a stale or mismatched competition slug.
+  // Try the selected competition first, then fall back to the other supported feeds.
+  const leagues = preferred
+    ? [preferred, ...LEAGUES.filter(league => league.id !== preferred.id)]
+    : LEAGUES;
   try {
     const summaries = await Promise.allSettled(leagues.map(async league => {
       const data = await espnGet('/' + league.id + '/summary?event=' + encodeURIComponent(id));
@@ -117,7 +121,7 @@ footballApiRouter.get('/fixture/:id', async (req: Request, res: Response) => {
     }));
     const match = summaries.find(result => result.status === 'fulfilled' && result.value);
     const fixture = match && match.status === 'fulfilled' ? match.value : null;
-    if (!fixture) return res.status(404).json({ error: 'Match details were not found in the selected competition.' });
+    if (!fixture) return res.status(404).json({ error: 'This match could not be found in the available ESPN football feeds. The fixture may be stale or unsupported.' });
     res.set('Cache-Control', 'no-store');
     res.json({ get: '/summary?event=' + id, results: 1, response: [fixture] });
   } catch (error) { sendError(res, error); }
