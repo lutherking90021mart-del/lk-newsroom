@@ -69,7 +69,7 @@ footballApiRouter.get('/fixtures', async (req: Request, res: Response) => {
 footballApiRouter.get('/fixture/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id || '');
   const requestedLeague = String(req.query.league || '');
-  if (!/^\\d{1,20}$/.test(id)) return res.status(400).json({ error: 'Invalid match ID.' });
+  if (!/^\d{1,20}$/.test(id)) return res.status(400).json({ error: 'Invalid match ID.' });
   const preferred = LEAGUES.find(league => league.id === requestedLeague);
   // The score card can occasionally carry a stale or mismatched competition slug.
   // Try the selected competition first, then fall back to the other supported feeds.
