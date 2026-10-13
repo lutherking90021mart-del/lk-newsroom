@@ -1,0 +1,24 @@
+{
+  "id": "/admin/",
+  "name": "LK Newsroom Admin",
+  "short_name": "LK Admin",
+  "description": "Manage LK Newsroom articles, videos, sources and newsroom operations.",
+  "start_url": "/admin/index.html?source=pwa",
+  "scope": "/admin/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07111f",
+  "theme_color": "#003366",
+  "categories": [
+    "news",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/assets/lk-newsroom-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
