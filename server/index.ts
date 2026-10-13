@@ -456,10 +456,10 @@ app.get('/v1/news',async(req,res)=>{
 });
 
 function videoDedupeKey(value:unknown){
-  return String(value||'').toLowerCase().replace(/https?:\\/\\/(?:www\\.)?youtube\\.com\\/watch\\?v=([^&]+).*/,'youtube:$1').replace(/https?:\\/\\/youtu\\.be\\/([^?&/]+).*/,'youtube:$1');
+  return String(value||'').toLowerCase().replace(/https?:\/\/(?:www\.)?youtube\.com\/watch\?v=([^&]+).*/,'youtube:$1').replace(/https?:\/\/youtu\.be\/([^?&/]+).*/,'youtube:$1');
 }
 function videoTitleTokens(value:unknown){
-  return new Set(String(value||'').toLowerCase().replace(/[^a-z0-9\\s]/g,' ').split(/\\s+/).filter(word=>word.length>2&&!['the','and','for','with','from','says','said','news','video','live','what','how','why','after','over','into','while','both'].includes(word)));
+  return new Set(String(value||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(word=>word.length>2&&!['the','and','for','with','from','says','said','news','video','live','what','how','why','after','over','into','while','both'].includes(word)));
 }
 function duplicateVideo(a:any,b:any){
   const aUrl=videoDedupeKey(a.youtube_url||a.video_url),bUrl=videoDedupeKey(b.youtube_url||b.video_url);
