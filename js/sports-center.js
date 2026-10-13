@@ -6,7 +6,7 @@ const LEAGUES = [
   { id: '61', slug: 'fra.1', name: 'Ligue 1' },
   { id: '2', slug: 'uefa.champions', name: 'Champions League' }
 ];
-const API_URL = '/v1/football/fixtures?date=';
+const API_URL = '/v1/football/fixtures?live=all';
 const safe = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const localDate = date => {
   const d = new Date(date);
@@ -28,8 +28,17 @@ function statusFor(fixture) {
   };
 }
 function normalize(item) {
-  const league = LEAGUES.find(x => String(x.id) === String(item.league?.id));
-  if (!league) return null;
+  const rawName = String(item.league?.name || 'Football');
+  const key = rawName.toLowerCase();
+  const aliases = [
+    { match: /premier league|english premier/, slug: 'eng.1', name: 'Premier League' },
+    { match: /la liga|primera division/, slug: 'esp.1', name: 'La Liga' },
+    { match: /serie a/, slug: 'ita.1', name: 'Serie A' },
+    { match: /bundesliga/, slug: 'ger.1', name: 'Bundesliga' },
+    { match: /ligue 1/, slug: 'fra.1', name: 'Ligue 1' },
+    { match: /champions league/, slug: 'uefa.champions', name: 'Champions League' }
+  ];
+  const league = aliases.find(x => x.match.test(key)) || { slug: 'other', name: rawName };
   const status = statusFor(item.fixture || {});
   return {
     id: String(item.fixture?.id || ''),
@@ -49,7 +58,7 @@ function normalize(item) {
 function scoreCard(match) {
   const scheduled = !match.status.live && !match.status.finished;
   const team = (name, logo, score) => `<div class="score-team"><span class="score-team__identity">${logo ? `<img src="${safe(logo)}" alt="" loading="lazy" onerror="this.style.display='none'">` : '<span class="score-team__crest"><i class="fa-solid fa-shield-halved"></i></span>'}<span>${safe(name)}</span></span><strong>${score == null ? (scheduled ? '' : '0') : safe(score)}</strong></div>`;
-  return `<article class="score-card ${match.status.live ? 'score-card--live' : ''}"><div class="score-card__top"><span>${safe(match.league)}</span><span class="score-status ${match.status.live ? 'score-status--live' : ''}">${match.status.live ? '<i></i>' : ''}${safe(match.status.label)}</span></div><div class="score-card__teams">${team(match.home,match.homeLogo,match.homeScore)}${team(match.away,match.awayLogo,match.awayScore)}</div><div class="score-card__bottom"><span>${scheduled ? safe(timeLabel(match.date)) : safe(match.detail || match.status.label)}</span><a href="../pages/match-centre.html?league=${encodeURIComponent(match.leagueId)}&event=${encodeURIComponent(match.id)}&provider=api-football" aria-label="Open full match centre">Match centre <i class="fa-solid fa-arrow-right"></i></a></div></article>`;
+  return `<article class="score-card ${match.status.live ? 'score-card--live' : ''}"><div class="score-card__top"><span>${safe(match.league)}</span><span class="score-status ${match.status.live ? 'score-status--live' : ''}">${match.status.live ? '<i></i>' : ''}${safe(match.status.label)}</span></div><div class="score-card__teams">${team(match.home,match.homeLogo,match.homeScore)}${team(match.away,match.awayLogo,match.awayScore)}</div><div class="score-card__bottom"><span>${scheduled ? safe(timeLabel(match.date)) : safe(match.detail || match.status.label)}</span><a href="../pages/match-centre.html?league=${encodeURIComponent(match.leagueId)}&event=${encodeURIComponent(match.id)}&provider=sportsapi" aria-label="Open full match centre">Match centre <i class="fa-solid fa-arrow-right"></i></a></div></article>`;
 }
 let allMatches = [];
 let activeLeague = 'all';
@@ -59,14 +68,14 @@ function renderScores() {
   const home = document.querySelector('#home-live-scores');
   const matches = (activeLeague === 'all' ? allMatches : allMatches.filter(match => match.leagueId === activeLeague))
     .sort((a,b) => Number(b.status.live)-Number(a.status.live) || new Date(a.date)-new Date(b.date));
-  if (full) full.innerHTML = matches.length ? matches.map(scoreCard).join('') : '<p class="scores-empty">No fixtures returned for these competitions today. Try again later.</p>';
+  if (full) full.innerHTML = matches.length ? matches.map(scoreCard).join('') : '<p class="scores-empty">There are no live football matches right now. Check back during match time.</p>';
   if (home) {
     const featured = [...allMatches].sort((a,b) => Number(b.status.live)-Number(a.status.live) || new Date(a.date)-new Date(b.date)).slice(0,4);
     home.innerHTML = featured.length ? featured.map(scoreCard).join('') : '<p class="scores-empty">No fixtures available right now. Check back for updates.</p>';
   }
 }
 async function fetchDate(date) {
-  const response = await fetch(API_URL + encodeURIComponent(date), {headers:{Accept:'application/json'}});
+  const response = await fetch(API_URL, {headers:{Accept:'application/json'}});
   if (!response.ok) throw new Error('Football data service unavailable');
   const payload = await response.json();
   return (payload.response || []).map(normalize).filter(Boolean);
@@ -76,18 +85,12 @@ async function refreshScores() {
   fetching = true;
   try {
     const today = localDate(new Date());
-    const tomorrowDate = new Date(Date.now() + 86400000);
-    const tomorrow = localDate(tomorrowDate);
-    const results = await Promise.allSettled([fetchDate(today), fetchDate(tomorrow)]);
+    const results = await Promise.allSettled([fetchDate(today)]);
     allMatches = [...new Map(results.flatMap(r => r.status === 'fulfilled' ? r.value : []).map(m => [m.id,m])).values()];
     const updated = document.querySelector('#scores-updated');
     if (updated) updated.textContent = allMatches.length ? `Updated ${new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date())} · data refreshes automatically` : 'Football feed temporarily unavailable';
     renderScores();
-    if (!allMatches.length) {
-      for (const el of [document.querySelector('#sports-live-scores'),document.querySelector('#home-live-scores')]) {
-        if (el) el.innerHTML = '<p class="scores-empty">We could not connect to the football feed. Please refresh in a moment.</p>';
-      }
-    }
+
   } catch {
     for (const el of [document.querySelector('#sports-live-scores'),document.querySelector('#home-live-scores')]) {
       if (el) el.innerHTML = '<p class="scores-empty">Live scores are temporarily unavailable. Please try again shortly.</p>';
