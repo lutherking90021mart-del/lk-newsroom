@@ -6,7 +6,7 @@ const LEAGUES = [
   { id: '61', slug: 'fra.1', name: 'Ligue 1' },
   { id: '2', slug: 'uefa.champions', name: 'Champions League' }
 ];
-const API_URL = '/v1/football/fixtures?live=all';
+const API_URL = '/v1/football/fixtures?date=';
 const safe = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const localDate = date => {
   const d = new Date(date);
@@ -75,7 +75,7 @@ function renderScores() {
   }
 }
 async function fetchDate(date) {
-  const response = await fetch(API_URL, {headers:{Accept:'application/json'}});
+  const response = await fetch(API_URL + encodeURIComponent(date), {headers:{Accept:'application/json'}});
   if (!response.ok) throw new Error('Football data service unavailable');
   const payload = await response.json();
   return (payload.response || []).map(normalize).filter(Boolean);
@@ -85,10 +85,13 @@ async function refreshScores() {
   fetching = true;
   try {
     const today = localDate(new Date());
-    const results = await Promise.allSettled([fetchDate(today)]);
+    const yesterdayDate = new Date(Date.now() - 86400000);
+    const tomorrowDate = new Date(Date.now() + 86400000);
+    const dates = [localDate(yesterdayDate), today, localDate(tomorrowDate)];
+    const results = await Promise.allSettled(dates.map(fetchDate));
     allMatches = [...new Map(results.flatMap(r => r.status === 'fulfilled' ? r.value : []).map(m => [m.id,m])).values()];
     const updated = document.querySelector('#scores-updated');
-    if (updated) updated.textContent = allMatches.length ? `Updated ${new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date())} · data refreshes automatically` : 'No live matches right now';
+    if (updated) updated.textContent = allMatches.length ? `Updated ${new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date())} · data refreshes automatically` : 'Fixtures updated';
     renderScores();
 
   } catch {
