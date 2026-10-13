@@ -52,7 +52,7 @@ footballApiRouter.get('/fixtures', async (req: Request, res: Response) => {
   try {
     const liveOnly = String(req.query.live || '') === 'all';
     const date = String(req.query.date || '');
-    if (!liveOnly && !/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) return res.status(400).json({ error: 'Provide live=all or a date in YYYY-MM-DD format.' });
+    if (!liveOnly && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Provide live=all or a date in YYYY-MM-DD format.' });
     const dates = liveOnly ? [new Date().toISOString().slice(0,10)] : [date];
     const scoreboards = await Promise.allSettled(dates.flatMap(d => LEAGUES.map(async league => {
       const compactDate = d.replaceAll('-', '');
