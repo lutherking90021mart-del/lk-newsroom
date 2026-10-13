@@ -88,7 +88,7 @@ async function refreshScores() {
     const results = await Promise.allSettled([fetchDate(today)]);
     allMatches = [...new Map(results.flatMap(r => r.status === 'fulfilled' ? r.value : []).map(m => [m.id,m])).values()];
     const updated = document.querySelector('#scores-updated');
-    if (updated) updated.textContent = allMatches.length ? `Updated ${new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date())} · data refreshes automatically` : 'Football feed temporarily unavailable';
+    if (updated) updated.textContent = allMatches.length ? `Updated ${new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit'}).format(new Date())} · data refreshes automatically` : 'No live matches right now';
     renderScores();
 
   } catch {
