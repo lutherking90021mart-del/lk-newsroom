@@ -1089,7 +1089,31 @@ async function adminQueryRows(env: Env, table: string, selectSpec: string, where
     : "SELECT * FROM " + adminQuoteIdentifier(table) + whereSql + ordering + limitOffset;
   const result = await env.DB.prepare(query).bind(...args, limit, offset).all();
   const rows = (result.results || []) as Record<string, any>[];
-  if (table === "articles") return rows.map(row => packArticle(row));
+  if (table === "articles") {
+    const packed = rows.map(row => packArticle(row));
+    if (String(selectSpec || "").includes("article_tags(") && packed.length) {
+      const ids = packed.map(row => String(row.id || "")).filter(Boolean);
+      const tagsByArticle = new Map<string, any[]>();
+      for (let at = 0; at < ids.length; at += 80) {
+        const part = ids.slice(at, at + 80);
+        const links = await env.DB.prepare("SELECT article_id,tag_id FROM article_tags WHERE article_id IN (" + part.map((_v,i)=>"?" + (i+1)).join(",") + ")").bind(...part).all();
+        const tagIds = [...new Set(((links.results || []) as any[]).map(row=>String(row.tag_id || "")).filter(Boolean))];
+        const tagMap = new Map<string,any>();
+        for (let ti = 0; ti < tagIds.length; ti += 80) {
+          const tagPart=tagIds.slice(ti,ti+80);
+          const tags=await env.DB.prepare("SELECT id,name,slug FROM tags WHERE id IN ("+tagPart.map((_v,i)=>"?" + (i+1)).join(",")+")").bind(...tagPart).all();
+          for(const tag of (tags.results||[]) as any[])tagMap.set(String(tag.id),tag);
+        }
+        for (const link of (links.results || []) as any[]) {
+          const list = tagsByArticle.get(String(link.article_id)) || [];
+          list.push({ tag_id: String(link.tag_id), tags: tagMap.get(String(link.tag_id)) || null });
+          tagsByArticle.set(String(link.article_id),list);
+        }
+      }
+      for (const row of packed) row.article_tags = tagsByArticle.get(String(row.id)) || [];
+    }
+    return packed;
+  }
 
   if (table === "users_roles" && rows.length) {
     const ids = [...new Set(rows.map(row => String(row.user_id || "")).filter(Boolean))];
