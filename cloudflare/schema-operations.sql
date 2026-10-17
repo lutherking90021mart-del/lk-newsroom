@@ -399,5 +399,6 @@ ALTER TABLE advertisements ADD COLUMN price REAL;
 ALTER TABLE advertisements ADD COLUMN currency TEXT DEFAULT 'GHS';
 ALTER TABLE advertisements ADD COLUMN campaign_goal TEXT;
 ALTER TABLE advertisements ADD COLUMN mobile_sticky INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE advertisements ADD COLUMN advertiser_id TEXT;
 ALTER TABLE advertisements ADD COLUMN advertiser_request_id TEXT;
 
