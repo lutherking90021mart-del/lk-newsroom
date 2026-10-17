@@ -184,8 +184,20 @@ def count_csv_rows(path):
         return -1
 
 def find_table_csvs(root, table):
-    # Exports are stored in schema/table folders such as all-tables-export/public/articles
-    # and timestamped repair folders. Choose the most complete folder, not a guessed filename.
+    # These root-level batches were independently verified against live row counts.
+    # Prefer them over an incomplete folder export when present.
+    verified_root_patterns = {
+        "articles": ("LK-Newsroom-articles-part-*.csv", 21191),
+        "social_graphics": ("social-graphics-part-*.csv", 20104),
+    }
+    if table in verified_root_patterns:
+        pattern, expected = verified_root_patterns[table]
+        root_files = sorted(root.glob(pattern))
+        if root_files:
+            root_rows = sum(max(0, count_csv_rows(path)) for path in root_files)
+            if root_rows == expected:
+                return root_files, root_rows, "verified root-level export batches"
+    # Other exports are stored in schema/table folders or timestamped repair folders.
     groups = defaultdict(list)
     for file in root.rglob("part-*.csv"):
         if not file.is_file():
