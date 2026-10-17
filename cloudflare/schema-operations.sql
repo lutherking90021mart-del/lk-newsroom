@@ -1,3 +1,6 @@
+-- Preserve the legacy CMS markdown field for imported articles.
+ALTER TABLE articles ADD COLUMN content_markdown TEXT;
+
 -- Additional application tables for the LK Newsroom Cloudflare migration.
 -- Run after schema.sql. Historical high-volume event/log tables are intentionally
 -- excluded from the first D1 data import and should be archived to R2 separately.
