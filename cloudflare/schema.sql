@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS articles (
   content_hash TEXT,
   auto_tags TEXT NOT NULL DEFAULT '[]',
   is_aggregated INTEGER NOT NULL DEFAULT 0,
-  duplicate_of TEXT,
+  duplicate_of TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_articles_public_published ON articles(status, published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_articles_category_published ON articles(category_id, status, published_at DESC);
