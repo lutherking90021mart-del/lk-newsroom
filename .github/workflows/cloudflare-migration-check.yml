@@ -11,6 +11,7 @@ on:
     paths:
       - "cloudflare/**"
       - "scripts/buildCloudflareImport.py"
+      - "scripts/Run-LKNewsroomCloudflareMigration.ps1"
       - "scripts/migrateStorageCsvToR2.ts"
       - "scripts/archiveDatabaseCsvToR2.ts"
       - "services/objectStorage.ts"
@@ -65,6 +66,16 @@ jobs:
           node --check js/revenue-admin.js
           node --check js/admin-analytics.js
           node --check js/monetization-admin.js
+      - name: Validate migration PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/Run-LKNewsroomCloudflareMigration.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List
+            exit 1
+          }
       - name: Validate archive scripts
         run: node --check scripts/archiveDatabaseCsvToR2.ts
       - name: Validate asset-build script syntax
