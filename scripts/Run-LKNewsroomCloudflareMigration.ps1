@@ -260,9 +260,16 @@ if ([int]$countResult.articles -ne 21191) {
 
 Write-Step '5/5 Build and deploy a Cloudflare preview (no production DNS cutover)'
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
-    Invoke-NpxLive @('npm', 'ci')
+    $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+    if (-not $npmCommand) { $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue }
+    if (-not $npmCommand) { throw 'npm was not found. Install Node.js 20 or newer, then rerun this script.' }
+    & $npmCommand.Source 'ci'
+    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed. The D1 data is preserved; no DNS change was made.' }
 }
-Invoke-NpxLive @('node', 'scripts/buildCloudflareAssets.mjs')
+$nodeCommand = Get-Command 'node' -ErrorAction SilentlyContinue
+if (-not $nodeCommand) { throw 'Node.js was not found. The D1 data is preserved; no DNS change was made.' }
+& $nodeCommand.Source 'scripts/buildCloudflareAssets.mjs'
+if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. The D1 data is preserved; no DNS change was made.' }
 Invoke-NpxLive @('wrangler', 'deploy')
 
 Write-Host ''
