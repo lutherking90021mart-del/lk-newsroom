@@ -389,6 +389,10 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   user_agent TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_user ON admin_sessions(user_id, expires_at);
+CREATE TABLE IF NOT EXISTS admin_bootstrap_lock (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS admin_login_attempts (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL,
