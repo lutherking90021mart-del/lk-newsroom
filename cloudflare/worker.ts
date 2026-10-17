@@ -636,7 +636,13 @@ async function beginCheckout(request: Request, env: Env, origin: string) {
             session.set("line_items[0][price_data][recurring][interval]", interval);
           }
         }
-        session.set("payment_intent_data[metadata][reference]", reference);
+        if (kind === "subscription") {
+          session.set("subscription_data[metadata][reference]", reference);
+          session.set("subscription_data[metadata][transaction_id]", transactionId);
+        } else {
+          session.set("payment_intent_data[metadata][reference]", reference);
+          session.set("payment_intent_data[metadata][transaction_id]", transactionId);
+        }
         const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
           method: "POST",
           headers: { authorization: "Bearer " + env.STRIPE_SECRET_KEY, "content-type": "application/x-www-form-urlencoded" },
