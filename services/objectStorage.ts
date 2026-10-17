@@ -50,7 +50,7 @@ async function uploadToBucket(
   if (!r2CredentialsPresent() || !targetBucket) throw new Error('Cloudflare R2 credentials or bucket name are not configured.');
   if (!key || key.startsWith('/') || key.split('/').some(part => part === '..')) throw new Error('Invalid object key.');
   const date = new Date();
-  const amzDate = date.toISOString().replace(/[:-]|\\.\\d{3}/g, '');
+  const amzDate = date.toISOString().replace(/[:-]|\.\d{3}/g, '');
   const shortDate = amzDate.slice(0, 8);
   const host = `${accountId()}`.concat('.r2.cloudflarestorage.com');
   const canonicalUri = `/${encodeURIComponent(targetBucket)}/${encodeKey(key)}`;
@@ -61,10 +61,10 @@ async function uploadToBucket(
     'x-amz-date': amzDate
   };
   const signedHeaders = 'content-type;host;x-amz-content-sha256;x-amz-date';
-  const canonicalHeaders = `content-type:${headers['content-type']}\\nhost:${host}\\nx-amz-content-sha256:${payloadHash}\\nx-amz-date:${amzDate}\\n`;
-  const canonicalRequest = ['PUT', canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\\n');
+  const canonicalHeaders = `content-type:${headers['content-type']}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+  const canonicalRequest = ['PUT', canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
   const scope = `${shortDate}/auto/s3/aws4_request`;
-  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256(canonicalRequest)].join('\\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256(canonicalRequest)].join('\n');
   const signature = createHmac('sha256', signingKey(shortDate)).update(stringToSign).digest('hex');
   headers.authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId()}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
   if (options.cacheControl) headers['cache-control'] = options.cacheControl;
