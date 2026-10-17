@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - migration/cloudflare-d1-r2-workers
+      - main
   pull_request:
     branches:
       - main
@@ -11,7 +12,15 @@ on:
       - "cloudflare/**"
       - "scripts/buildCloudflareImport.py"
       - "scripts/migrateStorageCsvToR2.ts"
+      - "scripts/archiveDatabaseCsvToR2.ts"
+      - "services/objectStorage.ts"
       - "scripts/buildCloudflareAssets.mjs"
+      - "js/**"
+      - "admin/**"
+      - "services/**"
+      - "package.json"
+      - "package-lock.json"
+      - "docs/CLOUDFLARE_D1_R2_MIGRATION.md"
       - "wrangler.jsonc"
       - ".github/workflows/cloudflare-migration-check.yml"
 
@@ -35,7 +44,7 @@ jobs:
       - name: Type-check the existing application
         run: npm run typecheck
       - name: Type-check the Cloudflare Worker and migration scripts
-        run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck cloudflare/worker.ts scripts/migrateStorageCsvToR2.ts
+        run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck cloudflare/worker.ts scripts/migrateStorageCsvToR2.ts scripts/archiveDatabaseCsvToR2.ts services/objectStorage.ts
       - name: Validate Python import converter syntax
         run: python -m py_compile scripts/buildCloudflareImport.py
       - name: Validate D1 schema with SQLite
@@ -48,6 +57,16 @@ jobs:
           db.executescript(Path("cloudflare/schema-operations.sql").read_text(encoding="utf-8"))
           print("D1 schema and operational tables execute successfully.")
           PY
+      - name: Validate browser admin module syntax
+        run: |
+          node --check js/admin-client.js
+          node --check js/auth.js
+          node --check js/admin.js
+          node --check js/revenue-admin.js
+          node --check js/admin-analytics.js
+          node --check js/monetization-admin.js
+      - name: Validate archive scripts
+        run: node --check scripts/archiveDatabaseCsvToR2.ts
       - name: Validate asset-build script syntax
         run: node --check scripts/buildCloudflareAssets.mjs
       - name: Build static preview assets
