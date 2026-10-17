@@ -35,7 +35,7 @@ function safeKey(value: string) {
 }
 async function main() {
   if (!await stat(root).catch(() => null)) throw new Error("Backup folder not found: " + root);
-  const backupCsvs = await walk(root);
+  const backupCsvs = (await walk(root)).filter(path => basename(path).toLowerCase() !== 'cloudflare-private-archive-manifest.csv');
   const desktopCsvs = (await readdir(desktop, { withFileTypes: true }).catch(() => []))
     .filter(entry => entry.isFile() && batchPattern.test(entry.name))
     .map(entry => join(desktop, entry.name));
