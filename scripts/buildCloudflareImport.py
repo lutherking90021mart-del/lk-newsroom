@@ -342,32 +342,42 @@ def insert_statement(table, row, source_map=None):
     if table == "authors" and values.get("source_id"):
         values["source_id"] = source_map.get(values["source_id"], values["source_id"])
     normalized = [normalize_value(table, col, values.get(col)) for col in columns]
-    if table == "article_tags":
-        prefix = "INSERT OR IGNORE"
-    else:
-        prefix = "INSERT OR REPLACE"
+    prefix = "INSERT OR IGNORE" if table == "article_tags" else "INSERT OR REPLACE"
     statement = prefix + " INTO " + table + " (" + ",".join(columns) + ") VALUES (" + ",".join(sql_literal(v) for v in normalized) + ");"
     if bytes_len(statement) <= 85000:
         return [statement]
-    if table == "articles" and "content" in columns:
-        idx = columns.index("content")
-        content = normalized[idx]
-        if not content:
-            raise ValueError("Article " + str(values.get("id")) + " produced an oversized SQL statement; inspect this row.")
+
+    # News stories can have long HTML and Markdown body columns. Leave those body
+    # columns empty in the initial insert, then append UTF-8-safe chunks by ID. This
+    # keeps each D1 statement below the size limit without truncating article text.
+    if table == "articles":
+        body_columns = [column for column in ("content", "content_markdown") if column in columns and normalized[columns.index(column)]]
+        if not body_columns:
+            raise ValueError("Article " + str(values.get("id")) + " exceeds the SQL statement limit without a splittable body column.")
         short_values = list(normalized)
-        short_values[idx] = ""
+        bodies = {}
+        for column in body_columns:
+            index = columns.index(column)
+            bodies[column] = str(short_values[index])
+            short_values[index] = ""
         base = prefix + " INTO articles (" + ",".join(columns) + ") VALUES (" + ",".join(sql_literal(v) for v in short_values) + ");"
         if bytes_len(base) > 85000:
-            raise ValueError("Article " + str(values.get("id")) + " has oversized non-content fields.")
-        chunks, pending = [], ""
-        for ch in str(content):
-            if bytes_len(pending + ch) > 22000:
-                chunks.append(pending); pending = ""
-            pending += ch
-        if pending:
-            chunks.append(pending)
-        update = ["UPDATE articles SET content=content || " + sql_literal(chunk) + " WHERE id=" + sql_literal(values.get("id")) + ";" for chunk in chunks]
-        return [base] + update
+            raise ValueError("Article " + str(values.get("id")) + " has oversized non-body fields.")
+        statements = [base]
+        for column, body in bodies.items():
+            chunks, pending = [], ""
+            for char in body:
+                if bytes_len(pending + char) > 20000:
+                    chunks.append(pending)
+                    pending = ""
+                pending += char
+            if pending:
+                chunks.append(pending)
+            statements.extend(
+                ["UPDATE articles SET " + column + "=" + column + " || " + sql_literal(chunk) + " WHERE id=" + sql_literal(values.get("id")) + ";"
+                 for chunk in chunks]
+            )
+        return statements
     raise ValueError("Row in table " + table + " exceeds Cloudflare D1's SQL statement limit; no data was truncated.")
 
 def row_count_from_csv(files):
