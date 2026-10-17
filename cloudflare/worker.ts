@@ -859,7 +859,7 @@ async function createAdminAccount(env: Env, values: { email: string; fullName: s
     env.DB.prepare("INSERT OR REPLACE INTO profiles(id,full_name,created_at,updated_at) VALUES (?1,?2,?3,?3)").bind(id, fullName, now),
     env.DB.prepare("INSERT OR REPLACE INTO users_roles(user_id,role,assigned_at) VALUES (?1,?2,?3)").bind(id, role, now)
   ]);
-  return safeAdminUser({ id, email, full_name: fullName, role, active: 1, must_change_password: 0, created_at: now });
+  return safeAdminUser({ id, email, full_name: fullName, role, active: 1, must_change_password: values.mustChangePassword === false ? 0 : 1, created_at: now });
 }
 async function createAdminSession(request: Request, env: Env, user: any, remember = false) {
   const token = newAdminToken();
