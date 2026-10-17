@@ -1325,8 +1325,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const origin = url.hostname.endsWith(".workers.dev") ? url.origin : (env.PUBLIC_ORIGIN || url.origin);
-  if (path === "/admin" || path.startsWith("/admin/")) {
-    return env.ASSETS.fetch(new Request(new URL("/admin-migration.html", url.origin).toString(), { method: "GET", headers: { accept: "text/html" } }));
+  if (path === "/admin" || path === "/admin/") {
+    return Response.redirect(new URL("/admin/index.html", url.origin).toString(), 302);
   }
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "Content-Type,Authorization", "access-control-max-age": "86400" } });
   if (path === "/v1/admin/bootstrap" && request.method === "POST") return handleAdminBootstrap(request, env, origin);
