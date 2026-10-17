@@ -38,6 +38,16 @@ jobs:
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck cloudflare/worker.ts scripts/migrateStorageCsvToR2.ts
       - name: Validate Python import converter syntax
         run: python -m py_compile scripts/buildCloudflareImport.py
+      - name: Validate D1 schema with SQLite
+        run: |
+          python - <<'PY'
+          import sqlite3
+          from pathlib import Path
+          db = sqlite3.connect(":memory:")
+          db.executescript(Path("cloudflare/schema.sql").read_text(encoding="utf-8"))
+          db.executescript(Path("cloudflare/schema-operations.sql").read_text(encoding="utf-8"))
+          print("D1 schema and operational tables execute successfully.")
+          PY
       - name: Validate asset-build script syntax
         run: node --check scripts/buildCloudflareAssets.mjs
       - name: Build static preview assets
