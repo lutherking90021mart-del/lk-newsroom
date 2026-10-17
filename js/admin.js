@@ -100,7 +100,7 @@ async function articlesManager(draftsOnly=false){
 async function uploadPublicImage(file){
   if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type))throw new Error('Choose a JPG, PNG or WebP image.');
   if(file.size>5_000_000)throw new Error('Images must be 5 MB or smaller.');
-  const safeName=String(file.name||'image').replace(/[^\\w.\\-]/g,'_');
+  const safeName=String(file.name||'image').replace(/[^A-Za-z0-9._-]/g,'_');
   const path='admin/'+Date.now()+'-'+safeName;
   const storage=supabase.storage.from('news-images');
   const uploaded=await storage.upload(path,file,{contentType:file.type,upsert:false});
