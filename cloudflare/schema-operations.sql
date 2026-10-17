@@ -355,3 +355,46 @@ CREATE TABLE IF NOT EXISTS company_staff_profiles (
   created_at TEXT,
   updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS membership_plans (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  description TEXT,
+  features TEXT NOT NULL DEFAULT '[]',
+  amount REAL NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'GHS',
+  interval TEXT NOT NULL DEFAULT 'monthly',
+  paystack_plan_code TEXT,
+  stripe_price_id TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS bookmarks (
+  user_id TEXT NOT NULL,
+  article_id TEXT NOT NULL,
+  created_at TEXT,
+  PRIMARY KEY(user_id, article_id)
+);
+CREATE TABLE IF NOT EXISTS article_likes (
+  user_id TEXT NOT NULL,
+  article_id TEXT NOT NULL,
+  created_at TEXT,
+  PRIMARY KEY(user_id, article_id)
+);
+
+ALTER TABLE advertisements ADD COLUMN title TEXT;
+ALTER TABLE advertisements ADD COLUMN description TEXT;
+ALTER TABLE advertisements ADD COLUMN ad_type TEXT NOT NULL DEFAULT 'direct';
+ALTER TABLE advertisements ADD COLUMN adsense_slot TEXT;
+ALTER TABLE advertisements ADD COLUMN popup_delay_seconds INTEGER NOT NULL DEFAULT 8;
+ALTER TABLE advertisements ADD COLUMN display_frequency TEXT NOT NULL DEFAULT 'session';
+ALTER TABLE advertisements ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE advertisements ADD COLUMN price REAL;
+ALTER TABLE advertisements ADD COLUMN currency TEXT DEFAULT 'GHS';
+ALTER TABLE advertisements ADD COLUMN campaign_goal TEXT;
+ALTER TABLE advertisements ADD COLUMN mobile_sticky INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE advertisements ADD COLUMN advertiser_request_id TEXT;
+
