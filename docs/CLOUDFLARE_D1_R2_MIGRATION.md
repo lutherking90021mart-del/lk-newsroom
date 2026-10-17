@@ -2,18 +2,19 @@
 
 ## Status and safety
 
-This work is isolated on `migration/cloudflare-d1-r2-workers`. It has **not** been merged into `main`, deployed, or connected to `lknewsroom.online`. The production domain/DNS and current Supabase data remain untouched. Keep all local CSV batches and previous exports; do not delete them after an import.
+The migration implementation was merged into `main` through [PR #7](https://github.com/lutherking90021mart-del/lk-newsroom/pull/7) on 17 October 2026. The merge changed repository source code; it did **not** create or seed a remote D1 database, run the media migration, or change DNS through the migration scripts. No GitHub Actions deployment workflow is configured here—its workflow validates source, schema and static build only. However, the hosting provider may auto-deploy from `main`, so check the hosting dashboard's deployment history before assuming the live app has not redeployed. Keep all local CSV batches and previous exports; do not delete them after an import.
 
 The branch currently contains:
 - Cloudflare Worker public-news API and static-site asset build, with Supabase browser access removed from the preview build;
 - a D1 schema and local CSV-to-SQL conversion tool;
 - a five-minute scheduled RSS ingest, optional News API/Guardian adapters, duplicate checks and a D1 lock to avoid overlapping runs;
 - a migration helper that can copy actual public-bucket files from Supabase Storage to the existing R2 bucket and create an old-URL/new-URL mapping;
+- Cloudflare-native admin login/session and password-change routes, staff enrollment/role checks, a D1-backed query compatibility API, and R2 media list/upload/delete endpoints;
 - APIs for public ads, advertising requests, newsletter subscription, football scores and match centre;
-- server-side Paystack/Stripe checkout and payment verification code, plus a signature-verified Paystack webhook;
-- CI checks for TypeScript, the importer, SQL schema, and static build.
+- server-side Paystack/Stripe checkout verification code, plus a signature-verified Paystack webhook;
+- CI checks for application/Worker TypeScript, Python importer syntax, D1 schema execution, admin module syntax, private archive script and static build.
 
-**Not yet complete:** no remote D1 database has been created/seeded, no Worker has been deployed/tested on its preview URL, and no actual media file copy has been completed. Admin CMS/login/roles and full staff, notification, social publishing, and upload workflows still require implementation and testing. The admin route intentionally displays a migration-in-progress page. Do not point the production domain at this branch yet.
+**Not yet complete:** no remote D1 database has been created/seeded, no Worker has been deployed/tested on its preview URL, and no actual media file copy has been completed. The admin/auth/media code has passed static checks but has not completed an end-to-end deployed test. Remaining admin workflows—especially notification delivery, social-account reconnection/publishing, password-reset email, and full feature parity—still need porting and testing. Do not point the production domain at Cloudflare until the cutover checklist is complete.
 
 ## Important Free-plan limitation
 
