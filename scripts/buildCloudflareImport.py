@@ -22,6 +22,10 @@ TABLE_COLUMNS = {
     "news_sources": ["id", "slug", "name", "source_type", "feed_url", "api_endpoint", "api_secret_name", "country", "default_category", "enabled", "last_synced_at", "last_status", "last_error", "consecutive_failures", "created_at", "updated_at"],
     "authors": ["id", "source_id", "name", "slug", "profile_url", "avatar_url", "created_at"],
     "tags": ["id", "name", "slug", "created_at"],
+    "settings": ["key", "value", "is_public", "updated_at"],
+    "membership_plans": ["id", "name", "slug", "description", "features", "amount", "currency", "interval", "paystack_plan_code", "stripe_price_id", "active", "sort_order", "created_at", "updated_at"],
+    "bookmarks": ["user_id", "article_id", "created_at"],
+    "article_likes": ["user_id", "article_id", "created_at"],
     "profiles": ["id", "full_name", "avatar_url", "bio", "created_at", "updated_at"],
     "users_roles": ["user_id", "role", "assigned_at"],
     "profiles": ["id", "full_name", "avatar_url", "bio", "created_at", "updated_at"],
@@ -36,7 +40,7 @@ TABLE_COLUMNS = {
     "gallery": ["id", "title", "caption", "image_url", "alt_text", "article_id", "status", "sort_order", "published_at", "created_at", "updated_at"],
     "comments": ["id", "article_id", "user_id", "parent_id", "display_name", "body", "status", "created_at", "updated_at"],
     "newsletter": ["id", "email", "status", "source", "created_at", "unsubscribed_at"],
-    "advertisements": ["id", "name", "placement", "image_url", "target_url", "html_content", "starts_at", "ends_at", "active", "impressions", "clicks", "created_at", "updated_at"],
+    "advertisements": ["id", "name", "title", "description", "placement", "image_url", "target_url", "html_content", "starts_at", "ends_at", "active", "impressions", "clicks", "ad_type", "adsense_slot", "popup_delay_seconds", "display_frequency", "status", "price", "currency", "campaign_goal", "mobile_sticky", "advertiser_id", "advertiser_request_id", "created_at", "updated_at"],
     "advertisers": ["id", "company_name", "contact_name", "email", "phone", "website", "created_at", "updated_at"],
     "advertising_packages": ["id", "title", "slug", "description", "placement", "price", "currency", "duration_days", "features", "active", "sort_order", "created_at", "updated_at"],
     "advertiser_requests": ["id", "advertiser_id", "package_id", "company_name", "contact_name", "email", "phone", "website", "advertisement_type", "requested_placement", "budget", "currency", "campaign_duration_days", "campaign_goal", "message", "status", "quoted_price", "admin_notes", "reviewed_by", "reviewed_at", "created_at", "updated_at"],
@@ -70,7 +74,8 @@ BOOLEAN_COLUMNS = {
     "featured_news": {"active"},
     "comments": set(),
     "newsletter": set(),
-    "advertisements": {"active"},
+    "advertisements": {"active", "mobile_sticky"},
+    "membership_plans": {"active"},
     "advertising_packages": {"active"},
     "company_staff_profiles": {"is_published"},
     "social_templates": {"enabled", "is_default"},
@@ -82,6 +87,8 @@ BOOLEAN_COLUMNS = {
 }
 JSON_COLUMNS = {
     "articles": {"auto_tags"},
+    "settings": {"value"},
+    "membership_plans": {"features"},
     "advertising_packages": {"features"},
     "affiliate_events": {"metadata"},
     "payment_transactions": {"provider_response"},
@@ -95,6 +102,10 @@ JSON_COLUMNS = {
 }
 REQUIRED = {
     "categories": {"id", "name", "slug"},
+    "settings": {"key", "value", "is_public"},
+    "membership_plans": {"id", "name", "slug"},
+    "bookmarks": {"user_id", "article_id"},
+    "article_likes": {"user_id", "article_id"},
     "profiles": {"id", "full_name"},
     "users_roles": {"user_id", "role"},
     "advertising_packages": {"id", "title", "slug", "placement", "price", "currency", "duration_days"},
@@ -145,9 +156,9 @@ REQUIRED = {
     "worker_runs": {"id", "trigger", "status", "started_at"}
 }
 TABLE_ORDER = [
-    "categories", "news_sources", "authors", "tags", "profiles", "users_roles",
-    "advertisers", "advertising_packages", "affiliate_campaigns", "affiliate_links",
-    "subscriptions", "donations", "articles", "article_tags", "breaking_news",
+    "categories", "news_sources", "authors", "tags", "profiles", "users_roles", "settings",
+    "advertisers", "advertising_packages", "membership_plans", "affiliate_campaigns", "affiliate_links",
+    "subscriptions", "donations", "articles", "article_tags", "bookmarks", "article_likes", "breaking_news",
     "live_updates", "trending_news", "featured_news", "videos", "gallery",
     "comments", "newsletter", "advertisements", "advertiser_requests",
     "sponsored_article_details", "affiliate_events", "payment_transactions",
@@ -411,7 +422,7 @@ def main():
             written["news_sources_fallback"] += 1
 
         # Small lookup tables and profile/role metadata.
-        for table in ["categories", "authors", "tags", "profiles", "users_roles", "advertisers", "advertising_packages", "affiliate_campaigns", "affiliate_links", "social_templates"]:
+        for table in ["categories", "authors", "tags", "profiles", "users_roles", "settings", "advertisers", "advertising_packages", "membership_plans", "affiliate_campaigns", "affiliate_links", "social_templates"]:
             files = table_files.get(table, [])
             for raw in read_rows(files):
                 row = dict(raw)
@@ -426,7 +437,7 @@ def main():
                 except Exception as exc:
                     warnings.append(table + ": " + str(exc))
         # Preserve data rows for all public-operational tables supported by the D1 schema.
-        for table in ["articles", "article_tags", "breaking_news", "live_updates", "trending_news", "featured_news", "videos", "gallery", "comments", "newsletter", "advertisements", "advertiser_requests", "sponsored_article_details", "affiliate_events", "subscriptions", "donations", "payment_transactions", "revenue", "company_enquiries", "company_staff_profiles", "social_graphics", "social_accounts", "social_posts", "notification_subscriptions", "daily_briefs", "notifications", "notification_deliveries", "notification_campaigns", "worker_runs"]:
+        for table in ["articles", "article_tags", "breaking_news", "live_updates", "trending_news", "featured_news", "videos", "gallery", "comments", "newsletter", "bookmarks", "article_likes", "advertisements", "advertiser_requests", "sponsored_article_details", "affiliate_events", "subscriptions", "donations", "payment_transactions", "revenue", "company_enquiries", "company_staff_profiles", "social_graphics", "social_accounts", "social_posts", "notification_subscriptions", "daily_briefs", "notifications", "notification_deliveries", "notification_campaigns", "worker_runs"]:
             files = table_files.get(table, [])
             for raw in read_rows(files):
                 row = dict(raw)
