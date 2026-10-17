@@ -147,6 +147,8 @@ finally:
         $code = $LASTEXITCODE
         if ($code -ne 0) { throw ('Local import preflight failed. No remote database changes were made.' + [Environment]::NewLine + $raw) }
         $parsed = ConvertFrom-ToolJson $raw
+        $script:PreflightCounts = $parsed.counts
+        $script:PreflightSizeMiB = $parsed.estimated_sqlite_mib
         Write-Host ('Local SQLite estimate: ' + $parsed.estimated_sqlite_mib + ' MiB') -ForegroundColor Green
         foreach ($key in $parsed.counts.PSObject.Properties.Name) {
             Write-Host ('  ' + $key + ': ' + $parsed.counts.$key)
@@ -217,7 +219,20 @@ Write-Host 'It does not switch the production domain or delete Supabase/local ba
 $confirmation = Read-Host 'Type MIGRATE to continue'
 if ($confirmation -cne 'MIGRATE') { throw 'Cancelled by user. No remote changes were made.' }
 
-Write-Step '3/5 Sign in to Cloudflare and prepare an empty D1 database'
+Write-Step '3/5 Install dependencies and prepare the preview build before remote changes'
+if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
+    $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+    if (-not $npmCommand) { $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue }
+    if (-not $npmCommand) { throw 'npm was not found. Install Node.js 20 or newer, then rerun this script.' }
+    & $npmCommand.Source 'ci'
+    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed. No Cloudflare changes were made.' }
+}
+$nodeCommand = Get-Command 'node' -ErrorAction SilentlyContinue
+if (-not $nodeCommand) { throw 'Node.js was not found. No Cloudflare changes were made.' }
+& $nodeCommand.Source 'scripts/buildCloudflareAssets.mjs'
+if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. No Cloudflare changes were made.' }
+
+Write-Step '4/5 Sign in to Cloudflare and prepare D1'
 $whoOutput = & $script:NpxPath wrangler whoami 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
     Write-Host 'Complete the Cloudflare sign-in that opens in your browser.' -ForegroundColor Yellow
@@ -243,33 +258,29 @@ Write-Host ('D1 database found: ' + $DatabaseName + ' (' + $databaseId + ')') -F
 
 $tableResult = Invoke-D1Query "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%';"
 $tableCount = [int]$tableResult.table_count
-if ($tableCount -gt 0) {
-    throw "The remote database already has $tableCount tables. To protect existing data, this runner will not rerun the initial schemas or import on a non-empty database. No tables were deleted."
-}
 
-Write-Step '4/5 Initialize D1, import newsroom data, and verify key counts'
-Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
-Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $OperationsSchemaFile, '--yes')
-Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SqlPath, '--yes')
+Write-Step '5/5 Import or resume the D1 migration, then deploy the preview'
+if ($tableCount -eq 0) {
+    Write-Host 'D1 is empty. Initializing schema and importing the verified CSV export.'
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $OperationsSchemaFile, '--yes')
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SqlPath, '--yes')
+} else {
+    Write-Host "D1 already has $tableCount tables. Checking whether this is a completed prior import; no existing tables will be dropped."
+}
 
 $countResult = Invoke-D1Query "SELECT (SELECT COUNT(*) FROM articles) AS articles, (SELECT COUNT(*) FROM social_graphics) AS social_graphics, (SELECT COUNT(*) FROM article_tags) AS article_tags, (SELECT COUNT(*) FROM social_posts) AS social_posts;"
 Write-Host ('Verified D1 counts: ' + ($countResult | ConvertTo-Json -Compress)) -ForegroundColor Green
 if ([int]$countResult.articles -ne 21191) {
-    throw 'Remote D1 article count is not 21,191. Deployment was stopped. Keep all backups; do not rerun schema/import on this non-empty database.'
+    throw 'Remote D1 does not contain exactly 21,191 articles. The runner will not deploy or overwrite this database. Keep all backups and contact me with the error.'
+}
+foreach ($tableName in @('social_graphics', 'article_tags', 'social_posts')) {
+    $expected = $script:PreflightCounts.$tableName
+    if ($null -ne $expected -and [int]$countResult.$tableName -ne [int]$expected) {
+        throw "Remote D1 $tableName count differs from the locally validated import. Deployment stopped; no data was deleted."
+    }
 }
 
-Write-Step '5/5 Build and deploy a Cloudflare preview (no production DNS cutover)'
-if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
-    $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
-    if (-not $npmCommand) { $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue }
-    if (-not $npmCommand) { throw 'npm was not found. Install Node.js 20 or newer, then rerun this script.' }
-    & $npmCommand.Source 'ci'
-    if ($LASTEXITCODE -ne 0) { throw 'npm ci failed. The D1 data is preserved; no DNS change was made.' }
-}
-$nodeCommand = Get-Command 'node' -ErrorAction SilentlyContinue
-if (-not $nodeCommand) { throw 'Node.js was not found. The D1 data is preserved; no DNS change was made.' }
-& $nodeCommand.Source 'scripts/buildCloudflareAssets.mjs'
-if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. The D1 data is preserved; no DNS change was made.' }
 Invoke-NpxLive @('wrangler', 'deploy')
 
 Write-Host ''
