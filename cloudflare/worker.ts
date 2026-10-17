@@ -318,7 +318,7 @@ async function runFeedSync(env: Env) {
   const started = new Date().toISOString();
   const runId = crypto.randomUUID();
   await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
-  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND source_type='rss' AND feed_url IS NOT NULL ORDER BY name LIMIT 10").all();
+  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND source_type='rss' AND feed_url IS NOT NULL ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").all();
   let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
   const categoryCache = new Map<string, string>();
   for (const source of (sources.results || []) as any[]) {
