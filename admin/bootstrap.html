@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#071426">
+<title>First Admin Setup | LK Newsroom</title>
+<link rel="icon" href="../assets/lk-newsroom-logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../styles/global.css">
+<style>
+:root{color-scheme:dark}body{min-height:100vh;background:#071426;color:#edf5ff;font-family:Inter,system-ui,Segoe UI,sans-serif}
+.auth-page{display:grid;place-items:center;min-height:100vh;padding:24px}.auth-box{width:min(100%,620px);margin:auto}.setup-warning{padding:14px;border:1px solid #8a6525;border-radius:12px;background:#3e2c0a;color:#ffe6ad;line-height:1.6;margin:16px 0}
+.form-card{padding:clamp(20px,4vw,36px);border:1px solid #29415c;background:#0c2037;border-radius:18px;box-shadow:0 25px 70px #0005}
+.form-help{line-height:1.55}.form-group{margin:14px 0}.form-control{width:100%}
+#setup-error{color:#ff9c9c;white-space:pre-wrap}#setup-success{color:#8df0c5;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<main class="auth-page">
+<section class="auth-box">
+<a href="../index.html"><img src="../assets/lk-newsroom-logo.svg" alt="LK Newsroom" style="width:175px;max-width:70%;height:auto;margin-bottom:22px"></a>
+<div class="form-card">
+<span class="eyebrow">One-time secure setup</span>
+<h1 style="font-size:2rem;margin:8px 0">Create the first newsroom admin</h1>
+<p class="text-muted">This creates the first Cloudflare-native super admin account. Old Supabase passwords are not transferred, so staff will need new accounts and passwords.</p>
+<div class="setup-warning"><strong>Before you continue:</strong> deploy the Worker preview, set the Worker secret <code>ADMIN_BOOTSTRAP_SECRET</code>, then enter that one-time secret below. After the first account is created, remove the Worker secret from Cloudflare. This page should be used once only.</div>
+<form id="bootstrap-form">
+<div class="form-group"><label for="setup-secret">One-time setup secret</label><input class="form-control" id="setup-secret" name="secret" type="password" autocomplete="off" required></div>
+<div class="form-group"><label for="setup-name">Full name</label><input class="form-control" id="setup-name" name="fullName" maxlength="120" autocomplete="name" required></div>
+<div class="form-group"><label for="setup-email">Work email</label><input class="form-control" id="setup-email" name="email" type="email" maxlength="254" autocomplete="email" required></div>
+<div class="form-group"><label for="setup-password">New password (minimum 12 characters)</label><input class="form-control" id="setup-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></div>
+<div class="form-group"><label for="setup-confirm">Confirm password</label><input class="form-control" id="setup-confirm" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></div>
+<button class="btn btn-primary" id="setup-submit" type="submit" style="width:100%;justify-content:center">Create first admin account</button>
+<p id="setup-error" role="alert"></p><p id="setup-success" role="status"></p>
+</form>
+<p class="form-help" style="margin-top:16px"><a href="/admin/login.html">Already created the first admin? Go to sign in.</a></p>
+</div>
+</section>
+</main>
+<script src="../js/config.js"></script>
+<script type="module">
+import { storeSession } from "../js/admin-client.js";
+const form = document.querySelector("#bootstrap-form");
+const button = document.querySelector("#setup-submit");
+const error = document.querySelector("#setup-error");
+const success = document.querySelector("#setup-success");
+form.addEventListener("submit", async event => {
+  event.preventDefault(); error.textContent = ""; success.textContent = "";
+  const fields = form.elements;
+  if (fields.password.value !== fields.confirmPassword.value) { error.textContent = "The passwords do not match."; return; }
+  if (fields.password.value.length < 12) { error.textContent = "Use a password of at least 12 characters."; return; }
+  button.disabled = true; button.textContent = "Creating secure account…";
+  try {
+    const base = String(window.LK_AGGREGATOR_API_URL || location.origin).replace(/\\/$/, "");
+    const response = await fetch(base + "/v1/admin/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-bootstrap-secret": fields.secret.value },
+      body: JSON.stringify({ fullName: fields.fullName.value, email: fields.email.value, password: fields.password.value })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Unable to create the first admin account.");
+    storeSession(payload.session, true);
+    success.textContent = "First super admin created. Remove ADMIN_BOOTSTRAP_SECRET from Worker secrets now. Opening the dashboard…";
+    form.reset();
+    window.setTimeout(() => { location.href = "/admin/index.html"; }, 900);
+  } catch (e) { error.textContent = e instanceof Error ? e.message : String(e); }
+  finally { button.disabled = false; button.textContent = "Create first admin account"; }
+});
+</script>
+</body>
+</html>
