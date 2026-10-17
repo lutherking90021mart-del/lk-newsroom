@@ -59,7 +59,25 @@ const videoCard=video=>{const external=Boolean(video.url);const href=video.url||
 const videoEmptyState=()=>`<div class="empty-state video-empty-state"><i class="fa-solid fa-circle-play fa-2x"></i><p>${videoFeedLoaded?'Publisher video feeds are syncing. New reports will appear here shortly.':'Video news is temporarily unavailable. Please try again shortly.'}</p></div>`;
 async function refreshBreaking(){try{const response=await fetch(`${aggregatorApi()}/v1/breaking`);if(!response.ok)return;const payload=await response.json();if(payload.data?.length)renderBreaking(payload.data);}catch{}}
 async function loadAdvertisements(){const slots=[...document.querySelectorAll('.ad-slot')];if(!slots.length)return;try{const rows=await newsApi.advertisements(30);if(!rows.length)return;slots.forEach((slot,index)=>{const placement=slot.dataset.adPlacement||(document.body.dataset.template==='article'?'article-sidebar':'homepage-sidebar');const matches=rows.filter(ad=>ad.placement===placement);const ad=(matches.length?matches:rows)[index%(matches.length||rows.length)];const image=ad.image_url?`<img src="${esc(ad.image_url)}" alt="${esc(ad.name)}" loading="lazy">`:'';const target=ad.target_url||'#';slot.innerHTML=`<span class="ad-label">Sponsored</span><a class="ad-link" href="${esc(target)}" ${ad.target_url?'target="_blank" rel="sponsored noopener"':''}>${image}<strong>${esc(ad.name)}</strong>${ad.html_content?`<span>${esc(ad.html_content)}</span>`:''}</a>`;void newsApi.trackAdvertisement(ad.id,'impression').catch(()=>{});slot.querySelector('.ad-link')?.addEventListener('click',()=>void newsApi.trackAdvertisement(ad.id,'click').catch(()=>{}));});}catch(error){console.warn('Could not load advertisements',error);}}
-function connectLiveUpdates(){if(!configured)return;subscribeRealtime('articles',async payload=>{if(payload.eventType==='INSERT'&&payload.new?.status==='published'){await hydrateNews();toast('A new verified story is live.');}});subscribeRealtime('breaking_news',async()=>{await refreshBreaking();toast('Breaking news updated.');});}
+function connectLiveUpdates(){
+  if(configured){
+    subscribeRealtime('articles',async payload=>{if(payload.eventType==='INSERT'&&payload.new?.status==='published'){await hydrateNews();toast('A new verified story is live.');}});
+    subscribeRealtime('breaking_news',async()=>{await refreshBreaking();toast('Breaking news updated.');});
+    return;
+  }
+  // D1 does not provide the Supabase realtime channel. Poll on the public API
+  // and refresh only when the newest article changes so open newsroom pages
+  // still surface stories discovered by the scheduled five-minute feed worker.
+  let latestKey=feed[0]?String(feed[0].id||feed[0].slug||feed[0].title||''):'';
+  window.setInterval(async()=>{
+    try{
+      await Promise.all([hydrateNews(),refreshBreaking()]);
+      const current=feed[0]?String(feed[0].id||feed[0].slug||feed[0].title||''):'';
+      if(current && current!==latestKey){location.reload();return;}
+      latestKey=current;
+    }catch{}
+  },300000);
+}
 
 function setTheme(){const saved=localStorage.getItem('lk-theme');if(saved)document.documentElement.dataset.theme=saved;}
 function initShell(){
