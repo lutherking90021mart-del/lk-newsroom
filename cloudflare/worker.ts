@@ -106,16 +106,19 @@ function autoTags(value: unknown): string[] {
 function packArticle(row: Record<string, any>) {
   const article: Record<string, any> = { ...row };
   delete article.category_name; delete article.category_slug;
-  delete article.source_name; delete article.source_slug; delete article.author_name;
-  delete article.author_slug; delete article.author_avatar;
+  delete article.source_name; delete article.source_slug;
+  delete article.author_name; delete article.author_slug; delete article.author_avatar;
+  delete article.profile_author_name; delete article.profile_author_avatar;
   article.categories = row.category_name ? { name: row.category_name, slug: row.category_slug } : null;
   article.news_sources = row.source_name ? { name: row.source_name, slug: row.source_slug } : null;
-  article.authors = row.author_name ? { name: row.author_name, slug: row.author_slug, avatar_url: row.author_avatar } : null;
+  article.profiles = row.profile_author_name ? { full_name: row.profile_author_name, avatar_url: row.profile_author_avatar } : null;
+  article.authors = row.author_name ? { name: row.author_name, slug: row.author_slug, avatar_url: row.author_avatar } :
+    (row.profile_author_name ? { name: row.profile_author_name, avatar_url: row.profile_author_avatar } : null);
   article.auto_tags = autoTags(row.auto_tags);
   return article;
 }
-const articleSelect = "a.id,a.slug,a.title,a.excerpt,a.content,a.content_markdown,a.ai_summary,a.featured_image_url,a.original_url,a.status,a.featured,a.breaking,a.allow_comments,a.scheduled_at,a.published_at,a.created_at,a.updated_at,a.meta_title,a.meta_description,a.canonical_url,a.view_count,a.category_id,a.author_id,a.source_id,a.external_id,a.external_author_id,a.country,a.source_updated_at,a.content_hash,a.auto_tags,a.is_aggregated,a.duplicate_of,c.name AS category_name,c.slug AS category_slug,s.name AS source_name,s.slug AS source_slug,au.name AS author_name,au.slug AS author_slug,au.avatar_url AS author_avatar";
-const articleJoin = " FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id LEFT JOIN authors au ON au.id=a.author_id ";
+const articleSelect = "a.id,a.slug,a.title,a.excerpt,a.content,a.content_markdown,a.ai_summary,a.featured_image_url,a.original_url,a.status,a.featured,a.breaking,a.allow_comments,a.scheduled_at,a.published_at,a.created_at,a.updated_at,a.meta_title,a.meta_description,a.canonical_url,a.view_count,a.category_id,a.author_id,a.source_id,a.external_id,a.external_author_id,a.country,a.source_updated_at,a.content_hash,a.auto_tags,a.is_aggregated,a.duplicate_of,c.name AS category_name,c.slug AS category_slug,s.name AS source_name,s.slug AS source_slug,au.name AS author_name,au.slug AS author_slug,au.avatar_url AS author_avatar,p.full_name AS profile_author_name,p.avatar_url AS profile_author_avatar";
+const articleJoin = " FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id LEFT JOIN authors au ON au.id=a.external_author_id LEFT JOIN profiles p ON p.id=a.author_id ";
 function articleQuery(env: Env, where: string) {
   return env.DB.prepare("SELECT " + articleSelect + articleJoin + where);
 }
