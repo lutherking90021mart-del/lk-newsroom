@@ -352,6 +352,101 @@ async function runFeedSync(env: Env) {
   return { status: "completed", runId, startedAt: started, completedAt: completed, fetched, added, updated, skipped, errors };
 }
 
+const FOOTBALL_LEAGUES = [
+  { id: "eng.1", name: "Premier League" },
+  { id: "esp.1", name: "La Liga" },
+  { id: "ita.1", name: "Serie A" },
+  { id: "ger.1", name: "Bundesliga" },
+  { id: "fra.1", name: "Ligue 1" },
+  { id: "uefa.champions", name: "Champions League" }
+];
+function footballFixture(event: any, league: { id: string; name: string }) {
+  const competition = event.competitions?.[0] || {};
+  const competitors = competition.competitors || [];
+  const home = competitors.find((team: any) => team.homeAway === "home") || competitors[0] || {};
+  const away = competitors.find((team: any) => team.homeAway === "away") || competitors[1] || {};
+  const state = String(event.status?.type?.state || competition.status?.type?.state || "").toLowerCase();
+  const statusName = String(event.status?.type?.name || competition.status?.type?.name || "");
+  const short = state === "in" ? (statusName === "STATUS_HALFTIME" ? "HT" : "LIVE") : state === "post" ? "FT" : "NS";
+  return {
+    fixture: {
+      id: String(event.id || ""),
+      date: event.date || competition.date || null,
+      status: {
+        short,
+        long: event.status?.type?.detail || competition.status?.type?.detail || event.status?.type?.description || "Scheduled",
+        elapsed: event.status?.displayClock ? Number.parseInt(String(event.status.displayClock), 10) || null : null
+      },
+      venue: { name: competition.venue?.fullName || "" }
+    },
+    league: { id: league.id, name: league.name },
+    teams: {
+      home: { id: home.id || home.team?.id || null, name: home.team?.displayName || home.team?.name || "Home", logo: home.team?.logo || home.team?.logos?.[0]?.href || "" },
+      away: { id: away.id || away.team?.id || null, name: away.team?.displayName || away.team?.name || "Away", logo: away.team?.logo || away.team?.logos?.[0]?.href || "" }
+    },
+    goals: { home: home.score === undefined || home.score === "" ? null : Number(home.score), away: away.score === undefined || away.score === "" ? null : Number(away.score) },
+    events: [], statistics: [], lineups: [], players: []
+  };
+}
+async function footballFixtures(url: URL) {
+  const liveOnly = url.searchParams.get("live") === "all";
+  const date = url.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+  if (!liveOnly && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "Provide live=all or a date in YYYY-MM-DD format." }, 400);
+  const compactDate = date.replace(/-/g, "");
+  const results = await Promise.allSettled(FOOTBALL_LEAGUES.map(async league => {
+    const response = await fetch("https://site.api.espn.com/apis/site/v2/sports/soccer/" + league.id + "/scoreboard?dates=" + compactDate, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error("Football scoreboard feed temporarily unavailable.");
+    const body = await response.json() as any;
+    return (body.events || []).map((event: any) => footballFixture(event, league));
+  }));
+  let fixtures = results.flatMap(item => item.status === "fulfilled" ? item.value : []);
+  if (liveOnly) fixtures = fixtures.filter(item => ["LIVE", "HT"].includes(item.fixture.status.short));
+  fixtures.sort((a, b) => new Date(a.fixture.date || 0).getTime() - new Date(b.fixture.date || 0).getTime());
+  return json({ get: liveOnly ? "/scoreboard?live=all" : "/scoreboard?date=" + date, results: fixtures.length, response: fixtures }, 200, "*");
+}
+async function footballFixtureDetail(id: string, leagueSlug: string) {
+  if (!/^\d{1,20}$/.test(id)) return json({ error: "Invalid match ID." }, 400);
+  const preferred = FOOTBALL_LEAGUES.find(item => item.id === leagueSlug);
+  const leagues = preferred ? [preferred, ...FOOTBALL_LEAGUES.filter(item => item.id !== preferred.id)] : FOOTBALL_LEAGUES;
+  const summaries = await Promise.allSettled(leagues.map(async league => {
+    const response = await fetch("https://site.api.espn.com/apis/site/v2/sports/soccer/" + league.id + "/summary?event=" + encodeURIComponent(id), { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10000) });
+    if (!response.ok) return null;
+    const data = await response.json() as any;
+    const header = data.header || {};
+    const event = header.competitions?.[0] ? header : data.events?.[0] || data.gameInfo?.event;
+    if (!event || (event.id && String(event.id) !== id)) return null;
+    const competition = event.competitions?.[0] || {};
+    const normalized = { ...event, id: event.id || id, date: event.date || competition.date || null, status: event.status || competition.status || {} };
+    const fixture = footballFixture(normalized, league);
+    fixture.events = (data.plays || []).map((play: any) => {
+      const displayClock = play.clock?.displayValue || play.clock?.displayClock || "";
+      const minute = displayClock ? Number.parseInt(String(displayClock), 10) : null;
+      return {
+        time: { elapsed: Number.isFinite(minute) ? minute : (play.period?.number ?? null), extra: null },
+        type: play.type?.text || play.type?.name || "Match event",
+        detail: play.text || play.shortText || "",
+        team: { name: play.team?.displayName || "" },
+        player: { name: play.participants?.[0]?.athlete?.displayName || "" },
+        assist: { name: "" }
+      };
+    });
+    fixture.statistics = (data.boxscore?.teams || []).map((team: any) => ({
+      team: { id: team.team?.id || null, name: team.team?.displayName || "" },
+      statistics: (team.statistics || []).map((stat: any) => ({ type: stat.name || stat.label, value: stat.displayValue ?? stat.value ?? null }))
+    }));
+    fixture.lineups = (data.boxscore?.players || []).flatMap((group: any) => (group.statistics || []).map((category: any) => ({
+      team: { name: group.team?.displayName || "" },
+      formation: "",
+      startXI: (category.athletes || []).map((entry: any) => ({ player: { name: entry.athlete?.displayName || entry.athlete?.fullName || "Player", number: entry.athlete?.jersey || "", pos: entry.athlete?.position?.abbreviation || "" } })),
+      substitutes: []
+    })));
+    return fixture;
+  }));
+  const found = summaries.find(item => item.status === "fulfilled" && item.value);
+  if (!found || found.status !== "fulfilled" || !found.value) return json({ error: "This match could not be found in the supported football feeds." }, 404);
+  return json({ get: "/summary?event=" + id, results: 1, response: [found.value] }, 200, "*");
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -368,6 +463,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     } catch (e) {
       return json({ status: "error", error: String(e) }, 503, origin);
     }
+  }
+  if (path === "/v1/football/fixtures" && request.method === "GET") return footballFixtures(url);
+  const footballDetailMatch = path.match(/^\/v1\/football\/fixture\/([^/]+)$/);
+  if (footballDetailMatch && request.method === "GET") {
+    return footballFixtureDetail(decodeURIComponent(footballDetailMatch[1]), url.searchParams.get("league") || "");
   }
   if (path === "/api/news/update" || path === "/v1/admin/sync") {
     const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
