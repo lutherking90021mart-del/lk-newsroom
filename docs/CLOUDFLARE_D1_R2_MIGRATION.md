@@ -51,6 +51,32 @@ The script creates `cloudflare-d1-core-import.sql` and `cloudflare-d1-import-rep
 
 If the real-file Storage migration has succeeded and generated `cloudflare-media-map.csv`, the import builder applies only its successful old-to-new URL mappings. If there is no verified map, it leaves existing media URLs untouched.
 
+## Windows: one-command Cloudflare preview runner (recommended)
+
+This runner consolidates the repeated PowerShell commands. It starts in **dry-run mode** and makes no Cloudflare changes unless you pass `-Apply`.
+
+From PowerShell, clone this branch and run the local validation:
+
+```powershell
+git clone https://github.com/lutherking90021mart-del/lk-newsroom.git
+cd lk-newsroom
+git checkout migration/one-command-cloudflare-import
+Set-ExecutionPolicy -Scope Process Bypass -Force
+& .\scripts\Run-LKNewsroomCloudflareMigration.ps1
+```
+
+It rebuilds the SQL from your existing local CSV exports, tests the import in a temporary local SQLite database, checks that 21,191 articles are present, and stops if conversion warnings appear or the estimated D1 size exceeds a 450 MiB safety margin. It preserves your CSVs and deletes the temporary test database after validation.
+
+If the report/counts and estimated size look correct, run the same script with the explicit apply switch:
+
+```powershell
+& .\scripts\Run-LKNewsroomCloudflareMigration.ps1 -Apply
+```
+
+It asks you to type `MIGRATE`, signs in to Cloudflare if needed, creates or finds `lk-newsroom-db`, imports only into an empty D1 database, checks key row counts, builds the static assets, and deploys a **workers.dev preview**. If a previous run fully imported D1 but failed at deployment, the runner verifies existing counts and can resume to the deploy step. If it detects a partial or mismatched database, it stops without deleting or overwriting tables. The runner never switches DNS.
+
+This is an active-news/database recovery step, not yet a guarantee that every legacy feature or image is recovered. CSVs include Storage metadata, not binary image/video files. Since the old Supabase project is restricted, some existing Supabase-hosted images may remain unavailable until the binaries are recovered or images are re-cached from their original licensed/public sources. Keep the Supabase project and every local backup unchanged.
+
 ## 2. Create the D1 database once
 
 Use the Cloudflare account that already owns the `lk-newsroom-media` R2 bucket:
