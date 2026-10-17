@@ -126,7 +126,9 @@ async function main() {
   const mappingPath = join(root, "cloudflare-media-map.csv");
   const mappings: string[] = ["bucket_id,name,old_public_url,new_public_url,status,error"];
   let copied = 0, failed = 0, skipped = 0;
+  let stopForSourceRestriction = false;
   await runWithConcurrency(selected, 4, async row => {
+    if (stopForSourceRestriction) return;
     const bucket = String(row.bucket_id);
     const name = String(row.name);
     const oldUrl = supabase.storage.from(bucket).getPublicUrl(name).data.publicUrl;
@@ -156,13 +158,11 @@ async function main() {
       }
     }
     mappings.push([bucket, name, oldUrl, newUrl, status, message].map(csvEscape).join(","));
-    if (status === "source_unavailable") skipped = selected.length - copied - failed;
     if ((copied + failed) % 100 === 0) console.log("Progress:", copied + failed, "/", selected.length, "copied:", copied, "failed:", failed);
     // A source restriction should be investigated rather than hammering the old project.
-    if (status === "source_unavailable") throw new Error("STOP_ON_SOURCE_RESTRICTION");
-  }).catch(async error => {
-    if (!(error instanceof Error && error.message === "STOP_ON_SOURCE_RESTRICTION")) throw error;
+    if (status === "source_unavailable") stopForSourceRestriction = true;
   });
+  skipped = Math.max(0, selected.length - copied - failed);
   await writeFile(mappingPath, mappings.join("\n") + "\n", "utf8");
   console.log("Media migration attempt complete. Copied:", copied, "Failed:", failed, "Not attempted:", skipped);
   console.log("URL mapping written to:", mappingPath);
