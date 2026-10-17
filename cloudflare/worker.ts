@@ -993,6 +993,263 @@ async function handleAdminCreateStaff(request: Request, env: Env, origin: string
     return json({ error: message }, status, origin);
   }
 }
+function adminQuoteIdentifier(value: string) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new Error("Invalid column name.");
+  return '"' + value + '"';
+}
+async function adminTableInfo(env: Env, table: string) {
+  if (!ADMIN_TABLES.has(table)) throw new Error("This table is not available through the admin API.");
+  const result = await env.DB.prepare("PRAGMA table_info(" + adminQuoteIdentifier(table) + ")").all();
+  const rows = (result.results || []) as any[];
+  if (!rows.length) throw new Error("The requested table does not exist in this D1 database.");
+  return {
+    columns: new Set(rows.map(row => String(row.name))),
+    primaryKeys: rows.filter(row => Number(row.pk || 0) > 0).sort((a,b) => Number(a.pk)-Number(b.pk)).map(row => String(row.name))
+  };
+}
+function adminRoleCanRead(role: string, table: string) {
+  if (!ADMIN_TABLES.has(table)) return false;
+  if (role === "super_admin" || role === "admin") {
+    if (role === "admin" && ["settings", "users_roles", "payment_transactions", "donations", "subscriptions"].includes(table)) return false;
+    return true;
+  }
+  return (ADMIN_TABLE_ROLE_ALLOWLIST[role] || []).includes(table);
+}
+function adminRoleCanWrite(role: string, table: string) {
+  if (role === "super_admin") return true;
+  if (table === "users_roles" || table === "settings" || ["payment_transactions", "donations", "subscriptions", "revenue"].includes(table)) return false;
+  if (role === "admin") return ADMIN_TABLES.has(table) && !["admin_login_attempts", "admin_users", "admin_sessions"].includes(table);
+  if (role === "editor") return ["articles", "article_tags", "authors", "categories", "tags", "news_sources", "breaking_news", "live_updates", "featured_news", "trending_news", "videos", "gallery", "comments", "newsletter"].includes(table);
+  if (role === "journalist") return ["articles", "article_tags", "tags"].includes(table);
+  if (role === "moderator") return ["comments", "notifications", "notification_subscriptions", "notification_deliveries", "newsletter"].includes(table);
+  return false;
+}
+function adminBuildWhere(
+  filters: any[],
+  columns: Set<string>,
+  table: string,
+  startIndex = 0,
+  forceAuthorId: string | null = null
+) {
+  const predicates: string[] = [];
+  const args: any[] = [];
+  const qualifier = table === "articles" ? "a." : "";
+  for (const filter of filters) {
+    if (!filter || typeof filter !== "object") continue;
+    const column = String(filter.column || "");
+    const op = String(filter.op || "eq").toLowerCase();
+    if (!columns.has(column)) throw new Error("Unsupported filter column: " + column);
+    const name = qualifier + adminQuoteIdentifier(column);
+    const value = filter.value;
+    if ((op === "eq" || op === "is") && value === null) {
+      predicates.push(name + " IS NULL");
+    } else if (op === "neq" && value === null) {
+      predicates.push(name + " IS NOT NULL");
+    } else if (["eq", "neq", "gt", "gte", "lt", "lte"].includes(op)) {
+      const operator = ({ eq: "=", neq: "<>", gt: ">", gte: ">=", lt: "<", lte: "<=" } as Record<string,string>)[op];
+      args.push(value);
+      predicates.push(name + " " + operator + " ?" + (startIndex + args.length));
+    } else if (op === "is") {
+      if (typeof value === "boolean") {
+        args.push(value ? 1 : 0);
+        predicates.push(name + " = ?" + (startIndex + args.length));
+      } else {
+        args.push(value);
+        predicates.push(name + " = ?" + (startIndex + args.length));
+      }
+    } else if (op === "in") {
+      if (!Array.isArray(value)) throw new Error("The IN filter must contain a list.");
+      if (!value.length) { predicates.push("1=0"); continue; }
+      if (value.length > 100) throw new Error("An IN filter can include at most 100 values.");
+      const placeholders = value.map(item => { args.push(item); return "?" + (startIndex + args.length); });
+      predicates.push(name + " IN (" + placeholders.join(",") + ")");
+    } else if (op === "like" || op === "ilike") {
+      args.push(String(value ?? ""));
+      predicates.push(name + (op === "ilike" ? " LIKE ?" : " LIKE ?") + (op === "ilike" ? " COLLATE NOCASE" : ""));
+      predicates[predicates.length - 1] = name + (op === "ilike" ? " LIKE ?" + (startIndex + args.length) + " COLLATE NOCASE" : " LIKE ?" + (startIndex + args.length));
+    } else {
+      throw new Error("Unsupported filter operator: " + op);
+    }
+  }
+  if (forceAuthorId && table === "articles") {
+    args.push(forceAuthorId);
+    predicates.push(qualifier + '"author_id"=?' + (startIndex + args.length));
+  }
+  return { sql: predicates.length ? " WHERE " + predicates.join(" AND ") : "", args };
+}
+async function adminQueryRows(env: Env, table: string, selectSpec: string, whereSql: string, args: any[], orders: any[], limit: number, offset: number) {
+  const orderSql: string[] = [];
+  const info = await adminTableInfo(env, table);
+  for (const order of orders) {
+    const column = String(order?.column || "");
+    if (!info.columns.has(column)) throw new Error("Unsupported order column: " + column);
+    orderSql.push((table === "articles" ? "a." : "") + adminQuoteIdentifier(column) + (order?.ascending === false ? " DESC" : " ASC"));
+  }
+  const ordering = orderSql.length ? " ORDER BY " + orderSql.join(", ") : (table === "articles" ? " ORDER BY COALESCE(a.published_at,a.created_at) DESC" : "");
+  const limitOffset = " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2);
+  const query = table === "articles"
+    ? "SELECT " + articleSelect + articleJoin + whereSql + ordering + limitOffset
+    : "SELECT * FROM " + adminQuoteIdentifier(table) + whereSql + ordering + limitOffset;
+  const result = await env.DB.prepare(query).bind(...args, limit, offset).all();
+  const rows = (result.results || []) as Record<string, any>[];
+  if (table === "articles") return rows.map(row => packArticle(row));
+
+  if (table === "users_roles" && rows.length) {
+    const ids = [...new Set(rows.map(row => String(row.user_id || "")).filter(Boolean))];
+    const profileMap = new Map<string, any>();
+    for (let at = 0; at < ids.length; at += 80) {
+      const part = ids.slice(at, at + 80);
+      if (!part.length) continue;
+      const profiles = await env.DB.prepare("SELECT id,full_name,avatar_url FROM profiles WHERE id IN (" + part.map((_v,i)=>"?" + (i+1)).join(",") + ")").bind(...part).all();
+      for (const profile of (profiles.results || []) as any[]) profileMap.set(String(profile.id), profile);
+    }
+    return rows.map(row => ({ ...row, profiles: profileMap.get(String(row.user_id)) || null }));
+  }
+  if (table === "article_tags" && rows.length) {
+    const ids = [...new Set(rows.map(row => String(row.tag_id || "")).filter(Boolean))];
+    const tagMap = new Map<string, any>();
+    for (let at = 0; at < ids.length; at += 80) {
+      const part = ids.slice(at, at + 80);
+      const tags = await env.DB.prepare("SELECT id,name,slug FROM tags WHERE id IN (" + part.map((_v,i)=>"?" + (i+1)).join(",") + ")").bind(...part).all();
+      for (const tag of (tags.results || []) as any[]) tagMap.set(String(tag.id), tag);
+    }
+    return rows.map(row => ({ ...row, tags: tagMap.get(String(row.tag_id)) || null }));
+  }
+  if (table === "comments" && rows.length) {
+    const ids = [...new Set(rows.map(row => String(row.article_id || "")).filter(Boolean))];
+    const articleMap = new Map<string, any>();
+    for (let at = 0; at < ids.length; at += 80) {
+      const part = ids.slice(at, at + 80);
+      const articles = await env.DB.prepare("SELECT id,title,slug FROM articles WHERE id IN (" + part.map((_v,i)=>"?" + (i+1)).join(",") + ")").bind(...part).all();
+      for (const article of (articles.results || []) as any[]) articleMap.set(String(article.id), article);
+    }
+    return rows.map(row => ({ ...row, articles: articleMap.get(String(row.article_id)) || null }));
+  }
+  if (table === "advertisements" && rows.length) {
+    const ids = [...new Set(rows.map(row => String(row.advertiser_id || "")).filter(Boolean))];
+    const advertiserMap = new Map<string, any>();
+    for (let at = 0; at < ids.length; at += 80) {
+      const part = ids.slice(at, at + 80);
+      const advertisers = await env.DB.prepare("SELECT id,company_name,contact_name,email FROM advertisers WHERE id IN (" + part.map((_v,i)=>"?" + (i+1)).join(",") + ")").bind(...part).all();
+      for (const advertiser of (advertisers.results || []) as any[]) advertiserMap.set(String(advertiser.id), advertiser);
+    }
+    return rows.map(row => ({ ...row, advertisers: advertiserMap.get(String(row.advertiser_id)) || null }));
+  }
+  return rows;
+}
+async function handleAdminQuery(request: Request, env: Env, origin: string) {
+  const session = await getAdminSession(request, env);
+  if (!session) return json({ data: null, error: { message: "Your admin session has expired. Sign in again." } }, 401, origin);
+  let body: any;
+  try { body = await request.json(); } catch { return json({ data: null, error: { message: "Invalid admin query." } }, 400, origin); }
+  const table = String(body.table || "");
+  const action = String(body.action || "select").toLowerCase();
+  if (!ADMIN_TABLES.has(table)) return json({ data: null, error: { message: "This table is not available through the Cloudflare admin API." } }, 403, origin);
+  if (action === "select" && !adminRoleCanRead(session.role, table)) return json({ data: null, error: { message: "Your role cannot read this table." } }, 403, origin);
+  if (action !== "select" && !adminRoleCanWrite(session.role, table)) return json({ data: null, error: { message: "Your role cannot modify this table." } }, 403, origin);
+  if (table === "users_roles" && action !== "select" && session.role !== "super_admin") return json({ data: null, error: { message: "Only a super admin can assign staff roles." } }, 403, origin);
+  try {
+    const info = await adminTableInfo(env, table);
+    const forceAuthorId = session.role === "journalist" && table === "articles" ? session.user_id : null;
+    const filters = Array.isArray(body.filters) ? body.filters : [];
+    if (action === "select") {
+      const where = adminBuildWhere(filters, info.columns, table, 0, forceAuthorId);
+      const limit = Math.max(1, Math.min(5000, Number(body.limit || 100) || 100));
+      const offset = Math.max(0, Math.min(1000000, Number(body.offset || 0) || 0));
+      let count: number | null = null;
+      if (body.count === "exact" || body.head === true) {
+        const countQuery = table === "articles"
+          ? "SELECT COUNT(*) AS count FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id LEFT JOIN authors au ON au.id=a.external_author_id LEFT JOIN profiles p ON p.id=a.author_id" + where.sql
+          : "SELECT COUNT(*) AS count FROM " + adminQuoteIdentifier(table) + where.sql;
+        const result = await env.DB.prepare(countQuery).bind(...where.args).first() as any;
+        count = Number(result?.count || 0);
+      }
+      if (body.head === true) return json({ data: [], count }, 200, origin);
+      const rows = await adminQueryRows(env, table, String(body.select || "*"), where.sql, where.args, Array.isArray(body.orders) ? body.orders : [], limit, offset);
+      if (body.single && rows.length !== 1) return json({ data: null, error: { message: "Expected exactly one row." }, count }, 406, origin);
+      if (body.maybeSingle) return json({ data: rows[0] || null, error: null, count }, 200, origin);
+      return json({ data: body.single ? rows[0] : rows, error: null, count }, 200, origin);
+    }
+    const values = Array.isArray(body.values) ? body.values : body.values && typeof body.values === "object" ? [body.values] : [];
+    if (action === "insert" || action === "upsert") {
+      if (!values.length || values.length > 100) throw new Error("Provide between 1 and 100 row objects.");
+      const returned: any[] = [];
+      const conflicts = typeof body.onConflict === "string" ? body.onConflict.split(",").map((value: string) => value.trim()).filter(Boolean) : [];
+      for (const original of values) {
+        const row: Record<string, any> = { ...original };
+        if (session.role === "journalist" && table === "articles") {
+          row.author_id = session.user_id;
+          row.status = "draft";
+          row.featured = 0;
+          row.breaking = 0;
+        }
+        for (const key of Object.keys(row)) if (!info.columns.has(key)) throw new Error("Unsupported column: " + key);
+        if (info.columns.has("id") && !row.id) row.id = crypto.randomUUID();
+        const now = new Date().toISOString();
+        if (info.columns.has("created_at") && !row.created_at) row.created_at = now;
+        if (info.columns.has("updated_at") && !row.updated_at) row.updated_at = now;
+        const insertColumns = Object.keys(row);
+        if (!insertColumns.length) throw new Error("No values provided.");
+        const placeholders = insertColumns.map((_key,index)=>"?" + (index+1));
+        let statement = "INSERT INTO " + adminQuoteIdentifier(table) + " (" + insertColumns.map(adminQuoteIdentifier).join(",") + ") VALUES (" + placeholders.join(",") + ")";
+        if (action === "upsert") {
+          const conflictColumns = conflicts.length ? conflicts : info.primaryKeys;
+          if (!conflictColumns.length || conflictColumns.some((key: string)=>!info.columns.has(key))) throw new Error("The upsert conflict key is invalid.");
+          const updates = insertColumns.filter(key=>!conflictColumns.includes(key) && !info.primaryKeys.includes(key));
+          if (updates.length) statement += " ON CONFLICT (" + conflictColumns.map(adminQuoteIdentifier).join(",") + ") DO UPDATE SET " + updates.map(key=>adminQuoteIdentifier(key)+"=excluded."+adminQuoteIdentifier(key)).join(",");
+          else statement += " ON CONFLICT (" + conflictColumns.map(adminQuoteIdentifier).join(",") + ") DO NOTHING";
+        }
+        statement += ";";
+        await env.DB.prepare(statement).bind(...insertColumns.map(key=>row[key] === undefined ? null : row[key])).run();
+        if (body.returning) {
+          const lookupColumns = action === "upsert" && conflicts.length ? conflicts : info.primaryKeys;
+          const lookupValues = lookupColumns.map(key=>row[key]);
+          if (lookupColumns.length && lookupValues.every(value=>value !== undefined)) {
+            const lookupFilters = lookupColumns.map((column: string,index: number)=>({column,op:"eq",value:lookupValues[index]}));
+            const where = adminBuildWhere(lookupFilters,info.columns,table);
+            const found=await adminQueryRows(env,table,String(body.select||"*"),where.sql,where.args,[],2,0);
+            returned.push(...found);
+          }
+        }
+      }
+      return json({ data: body.returning ? (body.single ? returned[0] || null : returned) : null, error: null }, 200, origin);
+    }
+    const where = adminBuildWhere(filters, info.columns, table, 0, forceAuthorId);
+    if (!where.sql) throw new Error("Updates and deletes require a filter.");
+    if (action === "update") {
+      const row: Record<string, any> = { ...(body.values || {}) };
+      if (session.role === "journalist" && table === "articles") {
+        delete row.status; delete row.featured; delete row.breaking; delete row.scheduled_at; delete row.author_id; delete row.duplicate_of;
+      }
+      for (const key of Object.keys(row)) if (!info.columns.has(key)) throw new Error("Unsupported column: " + key);
+      const setColumns = Object.keys(row);
+      if (!setColumns.length) throw new Error("No update values were provided.");
+      const set = setColumns.map((key,index)=>adminQuoteIdentifier(key)+"=?"+(index+1)).join(",");
+      const offset = setColumns.length;
+      const predicates = adminBuildWhere(filters,info.columns,table,offset,forceAuthorId);
+      await env.DB.prepare("UPDATE " + adminQuoteIdentifier(table) + " SET " + set + predicates.sql).bind(...setColumns.map(key=>row[key] === undefined ? null : row[key]),...predicates.args).run();
+      let returned: any[] = [];
+      if (body.returning) returned = await adminQueryRows(env,table,String(body.select||"*"),where.sql,where.args,[],Math.min(500,Number(body.limit||100) || 100),0);
+      if (table === "users_roles") {
+        const roles = await env.DB.prepare("SELECT user_id,role FROM users_roles").all();
+        for (const role of (roles.results || []) as any[]) {
+          await env.DB.prepare("UPDATE admin_users SET role=?1,updated_at=?2 WHERE id=?3").bind(role.role,new Date().toISOString(),role.user_id).run();
+        }
+      }
+      return json({ data: body.returning ? (body.single ? returned[0] || null : returned) : null, error: null }, 200, origin);
+    }
+    if (action === "delete") {
+      const predicates = adminBuildWhere(filters,info.columns,table,0,forceAuthorId);
+      await env.DB.prepare("DELETE FROM " + adminQuoteIdentifier(table) + predicates.sql).bind(...predicates.args).run();
+      return json({ data: null, error: null }, 200, origin);
+    }
+    throw new Error("Unsupported admin operation: " + action);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to run this query.";
+    return json({ data: null, error: { message } }, 400, origin);
+  }
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
