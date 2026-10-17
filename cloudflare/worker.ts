@@ -5,6 +5,7 @@ type Env = {
   MEDIA: any;
   ASSETS: any;
   CRON_SECRET?: string;
+  ADMIN_BOOTSTRAP_SECRET?: string;
   PUBLIC_ORIGIN?: string;
   R2_PUBLIC_BASE_URL?: string;
   GUARDIAN_API_KEY?: string;
@@ -790,6 +791,205 @@ async function handlePaystackWebhook(request: Request, env: Env, origin: string)
   return json({ received: true }, 200, origin);
 }
 
+const ADMIN_PASSWORD_ITERATIONS = 150000;
+const ADMIN_ROLES = new Set(["super_admin", "admin", "editor", "journalist", "moderator"]);
+const ADMIN_TABLES = new Set([
+  "articles", "article_tags", "authors", "categories", "tags", "news_sources",
+  "breaking_news", "live_updates", "featured_news", "trending_news", "videos",
+  "gallery", "comments", "newsletter", "profiles", "users_roles", "settings",
+  "advertisements", "advertisers", "advertiser_requests", "advertising_packages",
+  "sponsored_article_details", "affiliate_campaigns", "affiliate_links", "affiliate_events",
+  "membership_plans", "subscriptions", "donations", "payment_transactions", "revenue",
+  "social_templates", "social_graphics", "social_accounts", "social_posts", "social_logs",
+  "notifications", "notification_subscriptions", "notification_deliveries", "notification_campaigns",
+  "daily_briefs", "worker_runs", "feed_logs", "analytics_events", "page_views",
+  "company_enquiries", "company_staff_profiles"
+]);
+const ADMIN_TABLE_ROLE_ALLOWLIST: Record<string, string[]> = {
+  editor: ["articles", "article_tags", "authors", "categories", "tags", "news_sources", "breaking_news", "live_updates", "featured_news", "trending_news", "videos", "gallery", "comments", "newsletter", "profiles", "users_roles", "feed_logs"],
+  journalist: ["articles", "article_tags", "authors", "categories", "tags", "news_sources", "breaking_news", "live_updates", "featured_news", "trending_news", "videos", "gallery", "profiles", "users_roles"],
+  moderator: ["comments", "profiles", "users_roles", "notifications", "notification_subscriptions", "notification_deliveries", "newsletter"]
+};
+function adminBytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+}
+function adminHexToBytes(value: string) {
+  const bytes = new Uint8Array(Math.floor(value.length / 2));
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(value.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+function newAdminToken() {
+  return adminBytesToHex(crypto.getRandomValues(new Uint8Array(32)));
+}
+async function deriveAdminPassword(password: string, saltHex: string, iterations = ADMIN_PASSWORD_ITERATIONS) {
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: adminHexToBytes(saltHex), iterations, hash: "SHA-256" }, material, 256);
+  return adminBytesToHex(new Uint8Array(bits));
+}
+function safeAdminUser(row: any) {
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    full_name: String(row.full_name || ""),
+    role: String(row.role || "journalist"),
+    active: Number(row.active ?? 1) === 1,
+    must_change_password: Number(row.must_change_password ?? 0) === 1,
+    created_at: row.created_at || null,
+    last_login_at: row.last_login_at || null
+  };
+}
+async function createAdminAccount(env: Env, values: { email: string; fullName: string; password: string; role: string }) {
+  const email = values.email.trim().toLowerCase().slice(0, 254);
+  const fullName = values.fullName.trim().slice(0, 120);
+  const role = values.role;
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Enter a valid staff email address.");
+  if (fullName.length < 2) throw new Error("Enter the staff member's full name.");
+  if (values.password.length < 12 || values.password.length > 256) throw new Error("Password must be at least 12 characters long.");
+  if (!ADMIN_ROLES.has(role)) throw new Error("Choose a valid newsroom role.");
+  const id = crypto.randomUUID();
+  const salt = adminBytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const hash = await deriveAdminPassword(values.password, salt);
+  const now = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO admin_users(id,email,full_name,password_salt,password_hash,password_iterations,role,active,must_change_password,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,1,0,?8,?8)")
+    .bind(id, email, fullName, salt, hash, ADMIN_PASSWORD_ITERATIONS, role, now).run();
+  await env.DB.batch([
+    env.DB.prepare("INSERT OR REPLACE INTO profiles(id,full_name,created_at,updated_at) VALUES (?1,?2,?3,?3)").bind(id, fullName, now),
+    env.DB.prepare("INSERT OR REPLACE INTO users_roles(user_id,role,assigned_at) VALUES (?1,?2,?3)").bind(id, role, now)
+  ]);
+  return safeAdminUser({ id, email, full_name: fullName, role, active: 1, must_change_password: 0, created_at: now });
+}
+async function createAdminSession(request: Request, env: Env, user: any, remember = false) {
+  const token = newAdminToken();
+  const now = new Date();
+  const expiry = new Date(now.getTime() + (remember ? 7 * 24 : 12) * 60 * 60 * 1000).toISOString();
+  const id = crypto.randomUUID();
+  const userAgent = (request.headers.get("user-agent") || "").slice(0, 250);
+  await env.DB.prepare("INSERT INTO admin_sessions(id,user_id,token_hash,created_at,expires_at,last_seen_at,user_agent) VALUES (?1,?2,?3,?4,?5,?4,?6)")
+    .bind(id, user.id, await sha(token), now.toISOString(), expiry, userAgent).run();
+  return {
+    access_token: token,
+    token_type: "bearer",
+    expires_at: Math.floor(new Date(expiry).getTime() / 1000),
+    user: safeAdminUser(user)
+  };
+}
+async function getAdminSession(request: Request, env: Env) {
+  const authorization = request.headers.get("authorization") || "";
+  const token = authorization.replace(/^Bearer\s+/i, "").trim();
+  if (!/^([a-f0-9]{64})$/i.test(token)) return null;
+  const tokenHash = await sha(token);
+  const now = new Date().toISOString();
+  const row = await env.DB.prepare("SELECT s.id AS session_id,s.user_id,s.expires_at,u.email,u.full_name,u.role,u.active,u.must_change_password,u.created_at,u.last_login_at FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id WHERE s.token_hash=?1 AND s.revoked_at IS NULL AND s.expires_at>?2 AND u.active=1 LIMIT 1")
+    .bind(tokenHash, now).first() as any;
+  if (!row) return null;
+  const seenAt = now;
+  await env.DB.prepare("UPDATE admin_sessions SET last_seen_at=?1 WHERE id=?2").bind(seenAt, row.session_id).run();
+  return {
+    session_id: String(row.session_id),
+    user_id: String(row.user_id),
+    user: safeAdminUser({ ...row, id: row.user_id }),
+    role: String(row.role || "journalist")
+  };
+}
+async function handleAdminBootstrap(request: Request, env: Env, origin: string) {
+  const expectedSecret = String(env.ADMIN_BOOTSTRAP_SECRET || "");
+  const suppliedSecret = String(request.headers.get("x-admin-bootstrap-secret") || "");
+  if (!expectedSecret) return json({ error: "First-admin setup is not enabled. Set ADMIN_BOOTSTRAP_SECRET as a Worker secret before bootstrapping." }, 503, origin);
+  if (!suppliedSecret || !fixedTimeEquals(suppliedSecret, expectedSecret)) return json({ error: "Invalid setup token." }, 401, origin);
+  const count = await env.DB.prepare("SELECT COUNT(*) AS active_count FROM admin_users WHERE active=1").first() as any;
+  if (Number(count?.active_count || 0) > 0) return json({ error: "The first admin account has already been created." }, 409, origin);
+  const lock = await env.DB.prepare("INSERT OR IGNORE INTO admin_bootstrap_lock(id,created_at) VALUES ('initial',?1)").bind(new Date().toISOString()).run();
+  if (Number(lock?.meta?.changes || 0) !== 1) return json({ error: "Admin setup has already been started. Sign in with the first admin account." }, 409, origin);
+  try {
+    const body = await request.json() as any;
+    const user = await createAdminAccount(env, {
+      email: String(body.email || ""),
+      fullName: String(body.fullName || body.name || ""),
+      password: String(body.password || ""),
+      role: "super_admin"
+    });
+    const session = await createAdminSession(request, env, user, true);
+    return json({ user, session }, 201, origin);
+  } catch (error) {
+    await env.DB.prepare("DELETE FROM admin_bootstrap_lock WHERE id='initial'").run().catch(() => undefined);
+    const message = error instanceof Error ? error.message : "Unable to set up the first admin account.";
+    const status = /valid staff email|full name|at least 12 characters|valid newsroom role/.test(message) ? 400 : /UNIQUE|unique/i.test(message) ? 409 : 400;
+    return json({ error: message }, status, origin);
+  }
+}
+async function handleAdminLogin(request: Request, env: Env, origin: string) {
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "Invalid sign-in request." }, 400, origin); }
+  const email = String(body.email || "").trim().toLowerCase().slice(0, 254);
+  const password = String(body.password || "");
+  if (!email || password.length > 256) return json({ error: "Email or password is incorrect." }, 401, origin);
+  const recent = await env.DB.prepare("SELECT COUNT(*) AS failures FROM admin_login_attempts WHERE email=?1 AND successful=0 AND attempted_at>=datetime('now','-15 minutes')")
+    .bind(email).first() as any;
+  if (Number(recent?.failures || 0) >= 10) return json({ error: "Too many sign-in attempts. Wait 15 minutes and try again." }, 429, origin);
+  const user = await env.DB.prepare("SELECT id,email,full_name,password_salt,password_hash,password_iterations,role,active,must_change_password,created_at,last_login_at FROM admin_users WHERE email=?1 COLLATE NOCASE LIMIT 1")
+    .bind(email).first() as any;
+  let valid = false;
+  if (user && Number(user.active) === 1 && password.length >= 1) {
+    const derived = await deriveAdminPassword(password, String(user.password_salt), Number(user.password_iterations || ADMIN_PASSWORD_ITERATIONS));
+    valid = fixedTimeEquals(derived, String(user.password_hash || ""));
+  }
+  const attemptNow = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO admin_login_attempts(id,email,successful,attempted_at) VALUES (?1,?2,?3,?4)")
+    .bind(crypto.randomUUID(), email, valid ? 1 : 0, attemptNow).run();
+  if (!valid) return json({ error: "Email or password is incorrect." }, 401, origin);
+  await env.DB.prepare("UPDATE admin_users SET last_login_at=?1,updated_at=?1 WHERE id=?2").bind(attemptNow, user.id).run();
+  const refreshed = { ...user, last_login_at: attemptNow };
+  const session = await createAdminSession(request, env, refreshed, Boolean(body.remember));
+  return json({ user: safeAdminUser(refreshed), session }, 200, origin);
+}
+async function handleAdminLogout(request: Request, env: Env, origin: string) {
+  const session = await getAdminSession(request, env);
+  if (session) await env.DB.prepare("UPDATE admin_sessions SET revoked_at=?1 WHERE id=?2").bind(new Date().toISOString(), session.session_id).run();
+  return json({ ok: true }, 200, origin);
+}
+async function handleAdminChangePassword(request: Request, env: Env, origin: string) {
+  const session = await getAdminSession(request, env);
+  if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "Invalid password-change request." }, 400, origin); }
+  const currentPassword = String(body.currentPassword || "");
+  const newPassword = String(body.newPassword || "");
+  const row = await env.DB.prepare("SELECT password_salt,password_hash,password_iterations FROM admin_users WHERE id=?1 AND active=1").bind(session.user_id).first() as any;
+  if (!row) return json({ error: "Admin account not found." }, 404, origin);
+  const currentHash = await deriveAdminPassword(currentPassword, String(row.password_salt), Number(row.password_iterations || ADMIN_PASSWORD_ITERATIONS));
+  if (!fixedTimeEquals(currentHash, String(row.password_hash || ""))) return json({ error: "Current password is incorrect." }, 401, origin);
+  if (newPassword.length < 12 || newPassword.length > 256) return json({ error: "New password must be at least 12 characters long." }, 400, origin);
+  const salt = adminBytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const hash = await deriveAdminPassword(newPassword, salt);
+  const now = new Date().toISOString();
+  await env.DB.prepare("UPDATE admin_users SET password_salt=?1,password_hash=?2,password_iterations=?3,must_change_password=0,updated_at=?4 WHERE id=?5")
+    .bind(salt, hash, ADMIN_PASSWORD_ITERATIONS, now, session.user_id).run();
+  await env.DB.prepare("UPDATE admin_sessions SET revoked_at=?1 WHERE user_id=?2 AND id<>?3 AND revoked_at IS NULL")
+    .bind(now, session.user_id, session.session_id).run();
+  return json({ ok: true }, 200, origin);
+}
+async function handleAdminCreateStaff(request: Request, env: Env, origin: string) {
+  const session = await getAdminSession(request, env);
+  if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+  if (session.role !== "super_admin") return json({ error: "Only a super admin can create staff accounts." }, 403, origin);
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "Invalid staff account request." }, 400, origin); }
+  try {
+    const role = String(body.role || "journalist");
+    if (role === "super_admin" && session.role !== "super_admin") return json({ error: "Only a super admin may assign this role." }, 403, origin);
+    const user = await createAdminAccount(env, {
+      email: String(body.email || ""),
+      fullName: String(body.fullName || body.full_name || ""),
+      password: String(body.password || ""),
+      role
+    });
+    return json({ data: user }, 201, origin);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to create the staff account.";
+    const status = /valid staff email|full name|at least 12 characters|valid newsroom role/.test(message) ? 400 : /UNIQUE|unique/i.test(message) ? 409 : 400;
+    return json({ error: message }, status, origin);
+  }
+}
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
