@@ -1,0 +1,44 @@
+name: Cloudflare migration checks
+
+on:
+  push:
+    branches:
+      - migration/cloudflare-d1-r2-workers
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "cloudflare/**"
+      - "scripts/buildCloudflareImport.py"
+      - "scripts/migrateStorageCsvToR2.ts"
+      - "scripts/buildCloudflareAssets.mjs"
+      - "wrangler.jsonc"
+      - ".github/workflows/cloudflare-migration-check.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Type-check the existing application
+        run: npm run typecheck
+      - name: Type-check the Cloudflare Worker and migration scripts
+        run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck cloudflare/worker.ts scripts/migrateStorageCsvToR2.ts
+      - name: Validate Python import converter syntax
+        run: python -m py_compile scripts/buildCloudflareImport.py
+      - name: Validate asset-build script syntax
+        run: node --check scripts/buildCloudflareAssets.mjs
+      - name: Build static preview assets
+        run: node scripts/buildCloudflareAssets.mjs
