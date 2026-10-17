@@ -128,6 +128,9 @@ async function publicNews(request: Request, env: Env) {
   const limit = safeLimit(u.searchParams.get("limit"));
   const offset = Math.max(0, Math.min(1000000, Number(u.searchParams.get("offset") || 0) || 0));
   const filters: string[] = ["a.status='published'", "a.duplicate_of IS NULL"];
+  const view = String(u.searchParams.get("view") || "latest").toLowerCase();
+  if (view === "today") filters.push("COALESCE(a.published_at,a.created_at) >= datetime('now','start of day')");
+  if (view === "week") filters.push("COALESCE(a.published_at,a.created_at) >= datetime('now','-6 days')");
   const args: any[] = [];
   const category = u.searchParams.get("category") || "";
   const source = u.searchParams.get("source") || "";
@@ -147,7 +150,8 @@ async function publicNews(request: Request, env: Env) {
     args.push(p);
   }
   const where = " WHERE " + filters.join(" AND ");
-  const rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY COALESCE(a.published_at,a.created_at) DESC LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
+  const sortOrder = view === "trending" || view === "most-read" ? "a.view_count DESC, COALESCE(a.published_at,a.created_at) DESC" : "COALESCE(a.published_at,a.created_at) DESC";
+  const rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY " + sortOrder + " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
     .bind(...args, limit, offset).all();
   const count = await env.DB.prepare("SELECT COUNT(*) AS total FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id" + where)
     .bind(...args).first();
@@ -788,7 +792,7 @@ async function handlePaystackWebhook(request: Request, env: Env, origin: string)
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
-  const origin = env.PUBLIC_ORIGIN || url.origin;
+  const origin = url.hostname.endsWith(".workers.dev") ? url.origin : (env.PUBLIC_ORIGIN || url.origin);
   if (path === "/admin" || path.startsWith("/admin/")) {
     return env.ASSETS.fetch(new Request(new URL("/admin-migration.html", url.origin).toString(), { method: "GET", headers: { accept: "text/html" } }));
   }
@@ -868,7 +872,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (paymentMatch && request.method === "GET") return verifyPayment(decodeURIComponent(paymentMatch[1]), env, origin);
   if (path === "/v1/advertisements" && request.method === "GET") {
     const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
-    const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR starts_at<=datetime('now')) AND (ends_at IS NULL OR ends_at>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
+    const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR datetime(starts_at)<=datetime('now')) AND (ends_at IS NULL OR datetime(ends_at)>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
     return json({ data: rows.results || [] }, 200, origin);
   }
   if (path === "/v1/news" && request.method === "GET") return publicNews(request, env);
