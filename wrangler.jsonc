@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lk-newsroom-cloudflare",
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-10-17",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/v1/*", "/api/*", "/health", "/news/*", "/category/*", "/admin/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lk-newsroom-db"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "lk-newsroom-media"
+    }
+  ],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://lknewsroom.online",
+    "R2_PUBLIC_BASE_URL": "https://pub-e64980467aaf4f7fbc9a3a0fd62fac94.r2.dev"
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  }
+}
