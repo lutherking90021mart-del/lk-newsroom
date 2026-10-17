@@ -841,7 +841,7 @@ function safeAdminUser(row: any) {
     last_login_at: row.last_login_at || null
   };
 }
-async function createAdminAccount(env: Env, values: { email: string; fullName: string; password: string; role: string }) {
+async function createAdminAccount(env: Env, values: { email: string; fullName: string; password: string; role: string; mustChangePassword?: boolean }) {
   const email = values.email.trim().toLowerCase().slice(0, 254);
   const fullName = values.fullName.trim().slice(0, 120);
   const role = values.role;
@@ -853,8 +853,8 @@ async function createAdminAccount(env: Env, values: { email: string; fullName: s
   const salt = adminBytesToHex(crypto.getRandomValues(new Uint8Array(16)));
   const hash = await deriveAdminPassword(values.password, salt);
   const now = new Date().toISOString();
-  await env.DB.prepare("INSERT INTO admin_users(id,email,full_name,password_salt,password_hash,password_iterations,role,active,must_change_password,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,1,0,?8,?8)")
-    .bind(id, email, fullName, salt, hash, ADMIN_PASSWORD_ITERATIONS, role, now).run();
+  await env.DB.prepare("INSERT INTO admin_users(id,email,full_name,password_salt,password_hash,password_iterations,role,active,must_change_password,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,1,?8,?9,?9)")
+    .bind(id, email, fullName, salt, hash, ADMIN_PASSWORD_ITERATIONS, role, values.mustChangePassword === false ? 0 : 1, now).run();
   await env.DB.batch([
     env.DB.prepare("INSERT OR REPLACE INTO profiles(id,full_name,created_at,updated_at) VALUES (?1,?2,?3,?3)").bind(id, fullName, now),
     env.DB.prepare("INSERT OR REPLACE INTO users_roles(user_id,role,assigned_at) VALUES (?1,?2,?3)").bind(id, role, now)
@@ -909,7 +909,8 @@ async function handleAdminBootstrap(request: Request, env: Env, origin: string) 
       email: String(body.email || ""),
       fullName: String(body.fullName || body.name || ""),
       password: String(body.password || ""),
-      role: "super_admin"
+      role: "super_admin",
+      mustChangePassword: false
     });
     const session = await createAdminSession(request, env, user, true);
     return json({ user, session }, 201, origin);
@@ -1248,7 +1249,8 @@ async function handleAdminQuery(request: Request, env: Env, origin: string) {
       const set = setColumns.map((key,index)=>adminQuoteIdentifier(key)+"=?"+(index+1)).join(",");
       const offset = setColumns.length;
       const predicates = adminBuildWhere(filters,info.columns,table,offset,forceAuthorId);
-      await env.DB.prepare("UPDATE " + adminQuoteIdentifier(table) + " SET " + set + predicates.sql).bind(...setColumns.map(key=>row[key] === undefined ? null : row[key]),...predicates.args).run();
+      const updateWhere = table === "articles" ? predicates.sql.replace(/\ba\./g, "") : predicates.sql;
+      await env.DB.prepare("UPDATE " + adminQuoteIdentifier(table) + " SET " + set + updateWhere).bind(...setColumns.map(key=>row[key] === undefined ? null : row[key]),...predicates.args).run();
       let returned: any[] = [];
       if (body.returning) returned = await adminQueryRows(env,table,String(body.select||"*"),where.sql,where.args,[],Math.min(500,Number(body.limit||100) || 100),0);
       if (table === "users_roles") {
@@ -1261,7 +1263,9 @@ async function handleAdminQuery(request: Request, env: Env, origin: string) {
     }
     if (action === "delete") {
       const predicates = adminBuildWhere(filters,info.columns,table,0,forceAuthorId);
-      await env.DB.prepare("DELETE FROM " + adminQuoteIdentifier(table) + predicates.sql).bind(...predicates.args).run();
+      const deleteWhere = table === "articles" ? predicates.sql.replace(/\ba\./g, "") : predicates.sql;
+      if (!deleteWhere) throw new Error("Deletes require a filter.");
+      await env.DB.prepare("DELETE FROM " + adminQuoteIdentifier(table) + deleteWhere).bind(...predicates.args).run();
       return json({ data: null, error: null }, 200, origin);
     }
     throw new Error("Unsupported admin operation: " + action);
