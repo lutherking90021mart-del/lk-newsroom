@@ -1,6 +1,6 @@
 import { requireAdmin, signOut } from './auth.js';
 import { toast } from './components.js';
-import { configured, supabase } from './supabase-client.js';
+import { configured, supabase } from './admin-client.js';
 import { mountRevenueTools } from './revenue-admin.js';
 import { mountAnalyticsDashboard } from './admin-analytics.js';
 import { mountMonetizationSuite } from './monetization-admin.js';
