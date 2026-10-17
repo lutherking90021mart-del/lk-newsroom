@@ -52,7 +52,7 @@ form.addEventListener("submit", async event => {
   if (fields.password.value.length < 12) { error.textContent = "Use a password of at least 12 characters."; return; }
   button.disabled = true; button.textContent = "Creating secure account…";
   try {
-    const base = String(window.LK_AGGREGATOR_API_URL || location.origin).replace(/\\/$/, "");
+    const base = String(window.LK_AGGREGATOR_API_URL || location.origin).replace(/\/$/, "");
     const response = await fetch(base + "/v1/admin/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-admin-bootstrap-secret": fields.secret.value },
