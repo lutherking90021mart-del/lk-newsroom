@@ -182,19 +182,36 @@ def count_csv_rows(path):
         return -1
 
 def find_table_csvs(root, table):
-    # These root-level batches were independently verified against live row counts.
-    # Prefer them over an incomplete folder export when present.
+    # The large article/social batches may have been saved directly to Desktop
+    # instead of inside the backup folder. Search the backup root and its parent,
+    # group by the directory containing each batch set, and only select the known
+    # verified row count for these two large exports.
     verified_root_patterns = {
         "articles": ("LK-Newsroom-articles-part-*.csv", 21191),
         "social_graphics": ("social-graphics-part-*.csv", 20104),
     }
     if table in verified_root_patterns:
         pattern, expected = verified_root_patterns[table]
-        root_files = sorted(root.glob(pattern))
-        if root_files:
-            root_rows = sum(max(0, count_csv_rows(path)) for path in root_files)
-            if root_rows == expected:
-                return root_files, root_rows, "verified root-level export batches"
+        search_root = root.parent if root.parent.exists() else root
+        candidate_groups = defaultdict(list)
+        for path in search_root.rglob(pattern):
+            if path.is_file():
+                candidate_groups[path.parent].append(path)
+        scored = []
+        for folder, candidates in candidate_groups.items():
+            paths = sorted(set(candidates))
+            rows = sum(max(0, count_csv_rows(path)) for path in paths)
+            if rows == expected:
+                # Prefer files in the backup root, then the closest directory to it.
+                distance = len(folder.resolve().parts) + len(root.resolve().parts) - 2 * len(
+                    set(folder.resolve().parts) & set(root.resolve().parts)
+                )
+                scored.append((folder != root, distance, max((p.stat().st_mtime for p in paths), default=0), folder, paths, rows))
+        if scored:
+            scored.sort(key=lambda item: (item[0], item[1], -item[2]))
+            _outside_root, _distance, _newest, folder, paths, rows = scored[0]
+            return paths, rows, "verified batch folder: " + str(folder)
+
     # Other exports are stored in schema/table folders or timestamped repair folders.
     groups = defaultdict(list)
     for file in root.rglob("part-*.csv"):
