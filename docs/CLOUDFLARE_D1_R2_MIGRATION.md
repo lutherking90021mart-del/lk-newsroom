@@ -1,0 +1,161 @@
+# LK Newsroom migration: Supabase to Cloudflare D1 + R2
+
+## Status and safety
+
+This work is isolated on `migration/cloudflare-d1-r2-workers`. It has **not** been merged into `main`, deployed, or connected to `lknewsroom.online`. The production domain/DNS and current Supabase data remain untouched. Keep all local CSV batches and previous exports; do not delete them after an import.
+
+The branch currently contains:
+- Cloudflare Worker public-news API and static-site asset build, with Supabase browser access removed from the preview build;
+- a D1 schema and local CSV-to-SQL conversion tool;
+- a five-minute scheduled RSS ingest, optional News API/Guardian adapters, duplicate checks and a D1 lock to avoid overlapping runs;
+- a migration helper that can copy actual public-bucket files from Supabase Storage to the existing R2 bucket and create an old-URL/new-URL mapping;
+- APIs for public ads, advertising requests, newsletter subscription, football scores and match centre;
+- server-side Paystack/Stripe checkout and payment verification code, plus a signature-verified Paystack webhook;
+- CI checks for TypeScript, the importer, SQL schema, and static build.
+
+**Not yet complete:** no remote D1 database has been created/seeded, no Worker has been deployed/tested on its preview URL, and no actual media file copy has been completed. Admin CMS/login/roles and full staff, notification, social publishing, and upload workflows still require implementation and testing. The admin route intentionally displays a migration-in-progress page. Do not point the production domain at this branch yet.
+
+## Important Free-plan limitation
+
+Cloudflare D1 Free has a 500 MB per-database limit and an account-wide storage limit. This importer intentionally excludes high-volume historical logs and Supabase Storage metadata from D1; archive those CSV exports in R2 while preserving the local originals. CSV rows from `storage.objects` are **metadata only**. They are not the actual image/video/document bytes. The separate Storage migration script must download and upload real object bytes before their URLs are rewritten.
+
+Official references:
+- D1 limits: https://developers.cloudflare.com/d1/platform/limits/
+- D1 import/export: https://developers.cloudflare.com/d1/best-practices/import-export-data/
+- Workers static assets: https://developers.cloudflare.com/workers/static-assets/
+- Cron Triggers: https://developers.cloudflare.com/workers/configuration/cron-triggers/
+- R2 Workers API: https://developers.cloudflare.com/r2/api/workers/workers-api-reference/
+
+## 1. Use the existing backups
+
+The existing backup folder is expected at:
+
+```powershell
+$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup
+```
+
+The importer searches that folder and its parent Desktop for the separately verified article and social-graphics batches. It expects 21,191 article rows and 20,104 social-graphics rows in the complete exports. If it reports a different article count, stop and review the report; do not import a partial set.
+
+From a fresh repository checkout:
+
+```powershell
+git clone https://github.com/lutherking90021mart-del/lk-newsroom.git
+cd lk-newsroom
+git checkout migration/cloudflare-d1-r2-workers
+npm ci
+py -3 scripts/buildCloudflareImport.py "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup"
+```
+
+The script creates `cloudflare-d1-core-import.sql` and `cloudflare-d1-import-report.txt` inside the backup folder. It only reads local CSV files and writes a new local SQL/report file; it does not connect to, restore, or modify Supabase or Cloudflare. Review the report and warnings before importing. Do not commit the generated SQL, CSV batches or secrets to GitHub.
+
+If the real-file Storage migration has succeeded and generated `cloudflare-media-map.csv`, the import builder applies only its successful old-to-new URL mappings. If there is no verified map, it leaves existing media URLs untouched.
+
+## 2. Create the D1 database once
+
+Use the Cloudflare account that already owns the `lk-newsroom-media` R2 bucket:
+
+```powershell
+npx wrangler login
+npx wrangler d1 create lk-newsroom-db
+```
+
+Copy the returned D1 database ID into the `d1_databases` item in `wrangler.jsonc` as `"database_id": "YOUR_REAL_ID"`. Keep binding name `DB` and database name `lk-newsroom-db`. Do not put account secrets in this file.
+
+Then initialize and import:
+
+```powershell
+npx wrangler d1 execute lk-newsroom-db --remote --file=cloudflare/schema.sql
+npx wrangler d1 execute lk-newsroom-db --remote --file=cloudflare/schema-operations.sql
+npx wrangler d1 execute lk-newsroom-db --remote --file="$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup\cloudflare-d1-core-import.sql"
+```
+
+These two schema files are for a **new, empty D1 database**; do not rerun the `ALTER TABLE` schema file against an already initialized database. If the import exceeds the Free plan limit or fails, stop and keep all backups and the database intact. Do not change DNS or delete rows to force it through.
+
+Verify key counts:
+
+```powershell
+npx wrangler d1 execute lk-newsroom-db --remote --command="SELECT COUNT(*) AS total_articles FROM articles;"
+npx wrangler d1 execute lk-newsroom-db --remote --command="SELECT COUNT(*) AS total_article_tags FROM article_tags;"
+npx wrangler d1 execute lk-newsroom-db --remote --command="SELECT COUNT(*) AS total_social_graphics FROM social_graphics;"
+npx wrangler d1 execute lk-newsroom-db --remote --command="SELECT COUNT(*) AS total_social_posts FROM social_posts;"
+```
+
+Compare with the migration report. News ingestion can add stories after import, so counts can legitimately grow; unexpected missing rows must be reviewed rather than ignored.
+
+## 3. Archive CSV tables excluded from D1 to a private R2 bucket
+
+Historical logs, authentication exports, and Storage metadata can contain personal or operational data. Do **not** put those backups in the public `lk-newsroom-media` bucket. Create a separate private bucket:
+
+```powershell
+npx wrangler r2 bucket create lk-newsroom-private-media
+```
+
+Leave R2 public development URLs/custom domains disabled for this archive bucket. Create a separate R2 API token restricted to Object Read & Write for only `lk-newsroom-private-media`. Locally set `R2_ACCOUNT_ID`, `R2_PRIVATE_BUCKET_NAME=lk-newsroom-private-media`, `R2_PRIVATE_ACCESS_KEY_ID`, and `R2_PRIVATE_SECRET_ACCESS_KEY` in your uncommitted `.env`. Do not replace the existing public-media token or share either token in chat.
+
+First dry-run the CSV archive (no network uploads happen in dry-run mode):
+
+```powershell
+npx tsx scripts/archiveDatabaseCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup"
+```
+
+When the file count and size look right, apply it:
+
+```powershell
+npx tsx scripts/archiveDatabaseCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup" --apply
+```
+
+It uploads CSV export files—including excluded high-volume and auth/Storage metadata tables—to the **private** bucket with SHA-256 checksums, records a manifest locally and in R2, and preserves every local original. It does not archive secret files or alter/delete anything in Supabase. Keep the private bucket private.
+
+## 4. Copy actual Storage media to the public R2 bucket
+
+
+First do a dry run. From the repository root, create a local environment file (never commit it) that contains your existing server-only `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and R2 credentials. Do not paste those values into chat or a public file.
+
+```powershell
+npx tsx scripts/migrateStorageCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup"
+```
+
+The default run is a dry run. Review the number of objects and public buckets shown. Only when that preview is correct, run:
+
+```powershell
+npx tsx scripts/migrateStorageCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup" --apply
+```
+
+If Supabase returns a restriction/authentication error, stop and preserve the mapping/report; do not repeatedly hammer the old project. Confirm every desired object has status `copied`, then rebuild the SQL with the resulting media map before importing it into a fresh D1 database. Private buckets are deliberately not auto-copied; their access policy needs a separate decision.
+
+## 5. Build and deploy a preview only
+
+Build the static assets with the special preview client (it removes the browser's Supabase dependency and excludes server folders):
+
+```powershell
+node scripts/buildCloudflareAssets.mjs
+```
+
+Before deploying, configure these **as Worker secrets**, not in source files: `CRON_SECRET`, any needed `NEWS_API_KEY` or `GUARDIAN_API_KEY`, and payment secrets `PAYSTACK_SECRET_KEY` / `STRIPE_SECRET_KEY` only if you want to enable those providers. Keep the values private. You can set them using `npx wrangler secret put SECRET_NAME`.
+
+Deploy a preview Worker using `npx wrangler deploy`. Do not configure a custom domain yet. Test its `workers.dev` URL:
+- `/health`
+- `/v1/news?limit=5` and `/v1/news/<real-slug>`
+- `/v1/breaking`, `/v1/videos`, `/v1/categories/ghana`
+- `/v1/football/fixtures?date=YYYY-MM-DD`
+- newsletter and advertiser quote submission;
+- donation checkout and payment verification with the payment provider's test/sandbox credentials, then real credentials only after sandbox verification;
+- multiple scheduled ingestions, logs and deduplication.
+
+For Paystack, configure its webhook to the deployed Worker URL ending in `/v1/webhooks/paystack` only after verifying the preview endpoint. Stripe checkout return verification is present, but Stripe webhook and recurring-membership lifecycle parity still need separate implementation/testing.
+
+Cron is scheduled every five minutes (UTC). Do not remove the existing Render/Railway scheduler while preview testing. The database lock prevents overlapping Worker runs, and the query deduplication checks existing source/external IDs; this is not a reason to run two production ingestion systems indefinitely.
+
+## 6. Admin and final domain cutover
+
+The admin route on this branch is a placeholder. The existing Supabase Auth users/sessions and encrypted social OAuth tokens are not portable to D1 via the CSV importer. Staff authentication, role enforcement, article editing/publishing, file uploads, settings, social account reconnection, notification delivery, and company/admin tools must be completed and tested before production cutover.
+
+Only move `lknewsroom.online` and any custom media domain after:
+1. D1 row counts are checked and there is a recoverable copy outside the live D1 database.
+2. Actual image/video/document bytes have been copied to R2, and the URL map has been applied/verified in the browser.
+3. All public pages, category filters, article navigation, images, video pages, ads, football scores, payments and newsletter paths are smoke-tested.
+4. Admin login, roles, publishing, uploads and other required workflows are finished; no staff screen points back to Supabase by accident.
+5. Cloudflare scheduled ingestion works repeatedly without duplicate storms or free-tier limit failures.
+6. The owner explicitly approves the DNS cutover.
+
+Until then, leave the current DNS, main branch, Supabase project and backup files untouched.

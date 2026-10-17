@@ -1,6 +1,6 @@
 import { requireAdmin, signOut } from './auth.js';
 import { toast } from './components.js';
-import { configured, supabase } from './supabase-client.js';
+import { configured, supabase } from './admin-client.js';
 import { mountRevenueTools } from './revenue-admin.js';
 import { mountAnalyticsDashboard } from './admin-analytics.js';
 import { mountMonetizationSuite } from './monetization-admin.js';
@@ -100,10 +100,12 @@ async function articlesManager(draftsOnly=false){
 async function uploadPublicImage(file){
   if(!file||!['image/jpeg','image/png','image/webp'].includes(file.type))throw new Error('Choose a JPG, PNG or WebP image.');
   if(file.size>5_000_000)throw new Error('Images must be 5 MB or smaller.');
-  const bytes=new Uint8Array(await file.arrayBuffer());let binary='';const chunkSize=0x8000;
-  for(let offset=0;offset<bytes.length;offset+=chunkSize)binary+=String.fromCharCode(...bytes.subarray(offset,offset+chunkSize));
-  const payload=await aggregatorRequest('/v1/admin/media/upload',{method:'POST',body:JSON.stringify({contentType:file.type,fileBase64:btoa(binary)})});
-  return payload.url;
+  const safeName=String(file.name||'image').replace(/[^A-Za-z0-9._-]/g,'_');
+  const path='admin/'+Date.now()+'-'+safeName;
+  const storage=supabase.storage.from('news-images');
+  const uploaded=await storage.upload(path,file,{contentType:file.type,upsert:false});
+  if(uploaded.error)throw uploaded.error;
+  return storage.getPublicUrl(uploaded.data.path||path).data.publicUrl;
 }
 async function syncArticleTags(articleId,tagText){
   const db=api();const names=[...new Set(String(tagText||'').split(',').map(name=>name.trim()).filter(Boolean))];
@@ -180,10 +182,58 @@ async function mediaRecordManager(kind){
 }
 
 async function usersManager(){
-  viewLoading();const db=api();const {data}=await result(db.from('users_roles').select('user_id,role,profiles(full_name,avatar_url)').order('assigned_at',{ascending:false}));const rows=data||[];
-  $('#admin-view').innerHTML=`<section class="panel"><h3>Newsroom user roles</h3><p class="form-help">Create accounts in Supabase Authentication first. Super admins can assign roles here.</p><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>User ID</th><th>Role</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.profiles?.full_name||'Unnamed user')}</strong></td><td class="meta">${esc(row.user_id)}</td><td><select class="role-select form-control" data-id="${row.user_id}">${['super_admin','admin','editor','journalist','moderator'].map(role=>`<option ${row.role===role?'selected':''}>${role}</option>`).join('')}</select></td></tr>`).join('')||'<tr><td colspan="3" class="text-muted">No assigned newsroom roles yet.</td></tr>'}</tbody></table></div></section>`;
-  document.querySelectorAll('.role-select').forEach(select=>select.addEventListener('change',async()=>{try{await result(db.from('users_roles').update({role:select.value}).eq('user_id',select.dataset.id));toast('Role updated.');}catch(error){toast(error.message);}}));
+  const view=$('#admin-view');
+  const isSuperAdmin=access?.role==='super_admin';
+  if(!isSuperAdmin){
+    view.innerHTML='<section class="panel"><h3>Staff accounts</h3><p class="text-muted">Only a super admin can create accounts or manage newsroom roles.</p></section>';
+    return;
+  }
+  viewLoading('Loading Cloudflare newsroom accounts…');
+  const {data:{session}}=await supabase.auth.getSession();
+  const response=await fetch(`${String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'')}/v1/admin/staff`,{headers:{Authorization:`Bearer ${session?.access_token||''}`}});
+  const payload=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(payload.error||'Could not load Cloudflare staff accounts.');
+  const rows=payload.data||[];
+  view.innerHTML=`
+    <section class="panel">
+      <h3>Create Cloudflare staff account</h3>
+      <p class="form-help">Each teammate needs a new Cloudflare newsroom login. Supabase passwords are not transferred. Use a unique password of at least 12 characters and share it with the teammate privately.</p>
+      <form id="cloudflare-staff-form" class="editor-grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">
+        <div class="form-group"><label>Full name</label><input class="form-control" name="fullName" maxlength="120" required></div>
+        <div class="form-group"><label>Work email</label><input class="form-control" name="email" type="email" maxlength="254" required></div>
+        <div class="form-group"><label>Initial password (12+ characters)</label><input class="form-control" name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
+        <div class="form-group"><label>Role</label><select class="form-control" name="role"><option value="journalist">Journalist</option><option value="editor">Editor</option><option value="moderator">Moderator</option><option value="admin">Admin</option><option value="super_admin">Super admin</option></select></div>
+        <div style="display:flex;align-items:end"><button class="btn btn-primary" type="submit">Create staff login</button></div>
+      </form>
+      <p class="form-help">Keep the initial password private. Staff can change it after signing in. Email-based password reset is not enabled yet.</p>
+    </section>
+    <section class="panel">
+      <h3>Cloudflare staff accounts</h3>
+      <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th></tr></thead>
+      <tbody>${rows.map(row=>`<tr><td><strong>${esc(row.full_name||'Unnamed user')}</strong></td><td>${esc(row.email)}</td><td><select class="role-select form-control" data-id="${esc(row.id)}" ${row.id===session?.user?.id?'disabled':''}>${['super_admin','admin','editor','journalist','moderator'].map(role=>`<option value="${role}" ${row.role===role?'selected':''}>${role}</option>`).join('')}</select></td><td>${Number(row.active)===1?'<span class="status status-published">Active</span>':'<span class="status status-draft">Inactive</span>'}</td><td>${dateTime(row.last_login_at)}</td></tr>`).join('')||'<tr><td colspan="5" class="text-muted">No Cloudflare staff accounts yet.</td></tr>'}</tbody></table></div>
+      <p class="form-help">Imported Supabase roles may still exist in the legacy records, but they do not grant a Cloudflare login until an admin account is created here.</p>
+    </section>`;
+  $('#cloudflare-staff-form')?.addEventListener('submit',async event=>{
+    event.preventDefault();const form=event.currentTarget;const button=form.querySelector('[type="submit"]');button.disabled=true;
+    try{
+      const fields=form.elements;
+      const result=await fetch(`${String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'')}/v1/admin/staff`,{method:'POST',headers:{Authorization:`Bearer ${session?.access_token||''}`,'Content-Type':'application/json'},body:JSON.stringify({fullName:fields.fullName.value,email:fields.email.value,password:fields.password.value,role:fields.role.value})});
+      const data=await result.json().catch(()=>({}));
+      if(!result.ok)throw new Error(data.error||'Could not create staff login.');
+      toast('Cloudflare staff account created. Share the login privately with the teammate.');
+      await usersManager();
+    }catch(error){toast(error.message||'Could not create staff account.');}
+    finally{button.disabled=false;}
+  });
+  document.querySelectorAll('.role-select').forEach(select=>select.addEventListener('change',async()=>{
+    if(select.dataset.id===session?.user?.id){toast('You cannot change your own role here.');return;}
+    try{
+      await result(supabase.from('users_roles').update({role:select.value}).eq('user_id',select.dataset.id));
+      toast('Staff role updated.');await usersManager();
+    }catch(error){toast(error.message||'Could not update staff role.');}
+  }));
 }
+
 async function journalistsManager(){
   viewLoading();const db=api();const {data}=await result(db.from('profiles').select('*').order('full_name').limit(200));const rows=data||[];
   $('#admin-view').innerHTML=`<section class="panel"><h3>Writer profiles</h3><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Bio</th><th>Created</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.full_name||'Unnamed writer')}</strong></td><td>${esc(row.bio||'—')}</td><td>${dateTime(row.created_at)}</td></tr>`).join('')||'<tr><td colspan="3" class="text-muted">No profiles yet.</td></tr>'}</tbody></table></div></section>`;

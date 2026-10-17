@@ -1,4 +1,4 @@
-import { supabase } from './supabase-client.js';
+import { supabase } from './admin-client.js';
 import { toast } from './components.js';
 
 const $ = (selector, parent = document) => parent.querySelector(selector);

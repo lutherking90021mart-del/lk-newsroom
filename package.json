@@ -11,7 +11,9 @@
     "notifications:vapid": "node scripts/generate-vapid.mjs",
     "typecheck": "tsc --noEmit",
     "lint:html": "npx html-validate '**/*.html'",
-    "storage:migrate:r2": "tsx scripts/migrateSupabaseStorageToR2.ts"
+    "storage:migrate:r2": "tsx scripts/migrateSupabaseStorageToR2.ts",
+    "storage:migrate:csv-to-r2": "tsx scripts/migrateStorageCsvToR2.ts",
+    "storage:archive:csv-to-r2": "tsx scripts/archiveDatabaseCsvToR2.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
