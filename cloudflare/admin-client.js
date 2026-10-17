@@ -12,7 +12,7 @@ function readStoredSession() {
   }
   return null;
 }
-function storeSession(session, remember = false) {
+export function storeSession(session, remember = false) {
   try { localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY); } catch {}
   const store = remember ? localStorage : sessionStorage;
   try { store.setItem(SESSION_KEY, JSON.stringify(session)); } catch {}
