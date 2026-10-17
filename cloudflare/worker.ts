@@ -219,15 +219,24 @@ function toText(item: any, ...keys: string[]): string {
   }
   return "";
 }
-async function resolveCategory(env: Env, name: string) {
+async function resolveCategory(env: Env, name: string, cache: Map<string, string>) {
   const label = name || "World";
   const slug = slugify(label);
+  const cached = cache.get(slug);
+  if (cached) return { id: cached, createStatement: null };
   const existing = await env.DB.prepare("SELECT id FROM categories WHERE slug=?1").bind(slug).first();
-  if (existing) return String(existing.id);
+  if (existing) {
+    const id = String(existing.id);
+    cache.set(slug, id);
+    return { id, createStatement: null };
+  }
   const id = crypto.randomUUID();
-  await env.DB.prepare("INSERT OR IGNORE INTO categories(id,name,slug,created_at) VALUES(?1,?2,?3,?4)").bind(id, label, slug, new Date().toISOString()).run();
-  const actual = await env.DB.prepare("SELECT id FROM categories WHERE slug=?1").bind(slug).first();
-  return String(actual?.id || id);
+  cache.set(slug, id);
+  return {
+    id,
+    createStatement: env.DB.prepare("INSERT OR IGNORE INTO categories(id,name,slug,created_at) VALUES (?1,?2,?3,?4)")
+      .bind(id, label, slug, new Date().toISOString())
+  };
 }
 
 async function parseFeed(source: any): Promise<any[]> {
@@ -250,52 +259,82 @@ async function parseFeed(source: any): Promise<any[]> {
   }).filter((item: any) => item.title && item.url);
 }
 
-async function upsertFeedArticle(env: Env, source: any, item: any, categoryId: string) {
-  const existing = await env.DB.prepare("SELECT id FROM articles WHERE source_id=?1 AND external_id=?2 LIMIT 1").bind(source.id, item.external).first();
-  const hash = await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim());
-  if (!existing) {
-    const duplicate = await env.DB.prepare("SELECT id FROM articles WHERE content_hash=?1 AND source_id<>?2 LIMIT 1").bind(hash, source.id).first();
-    if (duplicate) return "duplicate";
+async function upsertFeedArticles(env: Env, source: any, entries: any[], categoryId: string, categoryStatement: any) {
+  if (!entries.length) {
+    if (categoryStatement) await env.DB.batch([categoryStatement]);
+    return { inserted: 0, updated: 0, skipped: 0 };
   }
-  const id = existing ? String(existing.id) : crypto.randomUUID();
-  const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(item.external)).slice(0, 8));
-  const now = new Date().toISOString();
-  const isBreaking = breakingTerms.test(item.title + " " + item.summary) ? 1 : 0;
-  const statements = [
-    env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'published',?8,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,published_at=excluded.published_at,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
-      .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 5000), item.content.slice(0, 20000), item.image, item.url, isBreaking, item.published, now, categoryId, source.id, item.external.slice(0, 1000), source.country, hash),
-    env.DB.prepare("INSERT INTO live_updates(id,article_id,title,body,kind,pinned,published_at,created_at) VALUES (?1,?2,?3,?4,?5,0,?6,?7) ON CONFLICT(article_id) DO UPDATE SET title=excluded.title,body=excluded.body,kind=excluded.kind,published_at=excluded.published_at")
-      .bind(crypto.randomUUID(), id, item.title.slice(0, 800), item.summary.slice(0, 5000), isBreaking ? "breaking" : "news", item.published, now)
-  ];
-  if (isBreaking) {
-    statements.push(env.DB.prepare("INSERT INTO breaking_news(id,article_id,source_id,headline,link_url,active,pinned,starts_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,1,0,?6,?7,?7) ON CONFLICT(article_id) DO UPDATE SET headline=excluded.headline,link_url=excluded.link_url,active=1,starts_at=excluded.starts_at")
-      .bind(crypto.randomUUID(), id, source.id, item.title.slice(0, 800), item.url, item.published, now));
+  const externalIds = Array.from(new Set(entries.map(item => String(item.external).slice(0, 1000))));
+  const externalPlaceholders = externalIds.map((_value, index) => "?" + (index + 2)).join(",");
+  const existingRows = await env.DB.prepare("SELECT id,external_id FROM articles WHERE source_id=?1 AND external_id IN (" + externalPlaceholders + ")")
+    .bind(source.id, ...externalIds).all();
+  const existingByExternal = new Map<string, string>();
+  for (const row of (existingRows.results || []) as any[]) existingByExternal.set(String(row.external_id), String(row.id));
+
+  const hashesByExternal = new Map<string, string>();
+  for (const item of entries) hashesByExternal.set(String(item.external).slice(0, 1000), await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim()));
+  const hashes = Array.from(new Set(Array.from(hashesByExternal.values())));
+  const externalHashes = hashes.length ? await env.DB.prepare("SELECT content_hash,source_id FROM articles WHERE content_hash IN (" + hashes.map((_value, index) => "?" + (index + 1)).join(",") + ")")
+    .bind(...hashes).all() : { results: [] };
+  const crossSourceHashes = new Set<string>();
+  for (const row of (externalHashes.results || []) as any[]) {
+    if (String(row.source_id) !== String(source.id) && row.content_hash) crossSourceHashes.add(String(row.content_hash));
   }
-  await env.DB.batch(statements);
-  return existing ? "updated" : "inserted";
+
+  const statements: any[] = [];
+  if (categoryStatement) statements.push(categoryStatement);
+  let inserted = 0, updated = 0, skipped = 0;
+  const seenThisRun = new Set<string>();
+  for (const item of entries) {
+    const external = String(item.external).slice(0, 1000);
+    const hash = hashesByExternal.get(external) || await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim());
+    if (crossSourceHashes.has(hash) || seenThisRun.has(source.slug + "|" + external)) {
+      skipped++;
+      continue;
+    }
+    seenThisRun.add(source.slug + "|" + external);
+    const existingId = existingByExternal.get(external);
+    const id = existingId || crypto.randomUUID();
+    const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(external)).slice(0, 8));
+    const now = new Date().toISOString();
+    const isBreaking = breakingTerms.test(item.title + " " + item.summary) ? 1 : 0;
+    statements.push(
+      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'published',?8,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,published_at=excluded.published_at,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
+        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 5000), item.content.slice(0, 20000), item.image, item.url, isBreaking, item.published, now, categoryId, source.id, external, source.country, hash),
+      env.DB.prepare("INSERT INTO live_updates(id,article_id,title,body,kind,pinned,published_at,created_at) VALUES (?1,?2,?3,?4,?5,0,?6,?7) ON CONFLICT(article_id) DO UPDATE SET title=excluded.title,body=excluded.body,kind=excluded.kind,published_at=excluded.published_at")
+        .bind(crypto.randomUUID(), id, item.title.slice(0, 800), item.summary.slice(0, 5000), isBreaking ? "breaking" : "news", item.published, now)
+    );
+    if (isBreaking) {
+      statements.push(env.DB.prepare("INSERT INTO breaking_news(id,article_id,source_id,headline,link_url,active,pinned,starts_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,1,0,?6,?7,?7) ON CONFLICT(article_id) DO UPDATE SET headline=excluded.headline,link_url=excluded.link_url,active=1,starts_at=excluded.starts_at")
+        .bind(crypto.randomUUID(), id, source.id, item.title.slice(0, 800), item.url, item.published, now));
+    }
+    if (existingId) updated++; else inserted++;
+  }
+  if (statements.length) await env.DB.batch(statements);
+  return { inserted, updated, skipped };
 }
+
 async function runFeedSync(env: Env) {
   const started = new Date().toISOString();
   const runId = crypto.randomUUID();
   await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
-  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND source_type='rss' AND feed_url IS NOT NULL ORDER BY name LIMIT 12").all();
+  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND source_type='rss' AND feed_url IS NOT NULL ORDER BY name LIMIT 10").all();
   let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
+  const categoryCache = new Map<string, string>();
   for (const source of (sources.results || []) as any[]) {
     const began = Date.now();
     try {
       const entries = (await parseFeed(source)).slice(0, 12);
       fetched += entries.length;
-      const categoryId = await resolveCategory(env, String(source.default_category || "World"));
-      for (const item of entries) {
-        const outcome = await upsertFeedArticle(env, source, item, categoryId);
-        if (outcome === "inserted") added++;
-        else if (outcome === "updated") updated++;
-        else skipped++;
-      }
+      const category = await resolveCategory(env, String(source.default_category || "World"), categoryCache);
+      const counts = await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
+      added += counts.inserted;
+      updated += counts.updated;
+      skipped += counts.skipped;
       const ended = new Date().toISOString();
       await env.DB.batch([
         env.DB.prepare("UPDATE news_sources SET last_synced_at=?1,last_status='success',last_error=NULL,consecutive_failures=0,updated_at=?1 WHERE id=?2").bind(ended, source.id),
-        env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'info','sync_completed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ fetched: entries.length }), Date.now() - began, ended)
+        env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'info','sync_completed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ fetched: entries.length, inserted: counts.inserted, updated: counts.updated, skipped: counts.skipped }), Date.now() - began, ended)
       ]);
     } catch (error) {
       errors++;
