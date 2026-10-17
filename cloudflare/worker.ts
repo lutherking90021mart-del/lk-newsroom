@@ -392,40 +392,61 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
 
 async function runFeedSync(env: Env) {
   const started = new Date().toISOString();
-  const runId = crypto.randomUUID();
-  await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
-  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1)))) ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0).all();
-  let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
-  const categoryCache = new Map<string, string>();
-  for (const source of (sources.results || []) as any[]) {
-    const began = Date.now();
-    try {
-      const entries = (await fetchSourceEntries(source, env)).slice(0, 12);
-      fetched += entries.length;
-      const category = await resolveCategory(env, String(source.default_category || "World"), categoryCache);
-      const counts = await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
-      added += counts.inserted;
-      updated += counts.updated;
-      skipped += counts.skipped;
-      const ended = new Date().toISOString();
-      await env.DB.batch([
-        env.DB.prepare("UPDATE news_sources SET last_synced_at=?1,last_status='success',last_error=NULL,consecutive_failures=0,updated_at=?1 WHERE id=?2").bind(ended, source.id),
-        env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'info','sync_completed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ fetched: entries.length, inserted: counts.inserted, updated: counts.updated, skipped: counts.skipped }), Date.now() - began, ended)
-      ]);
-    } catch (error) {
-      errors++;
-      const ended = new Date().toISOString();
-      const message = error instanceof Error ? error.message : String(error);
-      await env.DB.batch([
-        env.DB.prepare("UPDATE news_sources SET last_synced_at=?1,last_status='error',last_error=?2,consecutive_failures=consecutive_failures+1,updated_at=?1 WHERE id=?3").bind(ended, message.slice(0, 1000), source.id),
-        env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'error','sync_failed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ error: message.slice(0, 500) }), Date.now() - began, ended)
-      ]);
-    }
+  const lockName = "news-ingestion";
+  const lockUntil = new Date(Date.now() + 4 * 60 * 1000).toISOString();
+  const lock = await env.DB.prepare("INSERT INTO worker_locks(lock_name,locked_until) VALUES (?1,?2) ON CONFLICT(lock_name) DO UPDATE SET locked_until=excluded.locked_until WHERE worker_locks.locked_until<?3")
+    .bind(lockName, lockUntil, started).run();
+  if (Number(lock?.meta?.changes || 0) !== 1) {
+    return { status: "skipped", reason: "An ingestion job is already running.", startedAt: started };
   }
-  const completed = new Date().toISOString();
-  await env.DB.prepare("UPDATE worker_runs SET status='completed',completed_at=?1,fetched=?2,added=?3,updated=?4,skipped=?5,errors=?6 WHERE id=?7")
-    .bind(completed, fetched, added, updated, skipped, errors, runId).run();
-  return { status: "completed", runId, startedAt: started, completedAt: completed, fetched, added, updated, skipped, errors };
+
+  const runId = crypto.randomUUID();
+  let runCreated = false;
+  try {
+    await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
+    runCreated = true;
+    const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1)))) ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0).all();
+    let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
+    const categoryCache = new Map<string, string>();
+    for (const source of (sources.results || []) as any[]) {
+      const began = Date.now();
+      try {
+        const entries = (await fetchSourceEntries(source, env)).slice(0, 12);
+        fetched += entries.length;
+        const category = await resolveCategory(env, String(source.default_category || "World"), categoryCache);
+        const counts = await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
+        added += counts.inserted;
+        updated += counts.updated;
+        skipped += counts.skipped;
+        const ended = new Date().toISOString();
+        await env.DB.batch([
+          env.DB.prepare("UPDATE news_sources SET last_synced_at=?1,last_status='success',last_error=NULL,consecutive_failures=0,updated_at=?1 WHERE id=?2").bind(ended, source.id),
+          env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'info','sync_completed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ fetched: entries.length, inserted: counts.inserted, updated: counts.updated, skipped: counts.skipped }), Date.now() - began, ended)
+        ]);
+      } catch (error) {
+        errors++;
+        const ended = new Date().toISOString();
+        const message = error instanceof Error ? error.message : String(error);
+        await env.DB.batch([
+          env.DB.prepare("UPDATE news_sources SET last_synced_at=?1,last_status='error',last_error=?2,consecutive_failures=consecutive_failures+1,updated_at=?1 WHERE id=?3").bind(ended, message.slice(0, 1000), source.id),
+          env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'error','sync_failed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ error: message.slice(0, 500) }), Date.now() - began, ended)
+        ]);
+      }
+    }
+    const completed = new Date().toISOString();
+    await env.DB.prepare("UPDATE worker_runs SET status='completed',completed_at=?1,fetched=?2,added=?3,updated=?4,skipped=?5,errors=?6 WHERE id=?7")
+      .bind(completed, fetched, added, updated, skipped, errors, runId).run();
+    return { status: "completed", runId, startedAt: started, completedAt: completed, fetched, added, updated, skipped, errors };
+  } catch (error) {
+    if (runCreated) {
+      const message = error instanceof Error ? error.message : String(error);
+      await env.DB.prepare("UPDATE worker_runs SET status='failed',completed_at=?1,error=?2 WHERE id=?3")
+        .bind(new Date().toISOString(), message.slice(0, 1000), runId).run().catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    await env.DB.prepare("DELETE FROM worker_locks WHERE lock_name=?1 AND locked_until=?2").bind(lockName, lockUntil).run().catch(() => undefined);
+  }
 }
 
 const FOOTBALL_LEAGUES = [
