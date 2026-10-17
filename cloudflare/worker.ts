@@ -9,6 +9,8 @@ type Env = {
   R2_PUBLIC_BASE_URL?: string;
   GUARDIAN_API_KEY?: string;
   NEWS_API_KEY?: string;
+  PAYSTACK_SECRET_KEY?: string;
+  STRIPE_SECRET_KEY?: string;
 };
 
 const parser = new XMLParser({
@@ -521,6 +523,216 @@ async function footballFixtureDetail(id: string, leagueSlug: string) {
   return json({ get: "/summary?event=" + id, results: 1, response: [found.value] }, 200, "*");
 }
 
+function addPlanEndDate(startIso: string, interval: string) {
+  const date = new Date(startIso);
+  const normalized = String(interval || "monthly").toLowerCase();
+  if (normalized === "year" || normalized === "yearly" || normalized === "annual") date.setUTCFullYear(date.getUTCFullYear() + 1);
+  else if (normalized === "week" || normalized === "weekly") date.setUTCDate(date.getUTCDate() + 7);
+  else if (normalized === "day" || normalized === "daily") date.setUTCDate(date.getUTCDate() + 1);
+  else date.setUTCMonth(date.getUTCMonth() + 1);
+  return date.toISOString();
+}
+
+async function beginCheckout(request: Request, env: Env, origin: string) {
+  try {
+    const body = await request.json() as any;
+    const kind = String(body.kind || "").toLowerCase();
+    const provider = String(body.provider || "").toLowerCase();
+    const email = String(body.email || "").trim().toLowerCase().slice(0, 254);
+    if (!["donation", "subscription"].includes(kind)) return json({ error: "Choose a donation or membership checkout." }, 400, origin);
+    if (!["paystack", "stripe"].includes(provider)) return json({ error: "Choose Paystack or Stripe." }, 400, origin);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: "Enter a valid email address." }, 400, origin);
+    if (provider === "paystack" && !env.PAYSTACK_SECRET_KEY) return json({ error: "Paystack checkout has not been configured for this Cloudflare deployment yet." }, 503, origin);
+    if (provider === "stripe" && !env.STRIPE_SECRET_KEY) return json({ error: "Stripe checkout has not been configured for this Cloudflare deployment yet." }, 503, origin);
+
+    let amount = 0;
+    let currency = String(body.currency || "GHS").trim().toUpperCase();
+    let plan: any = null;
+    let planInterval = "monthly";
+    if (kind === "subscription") {
+      const planId = String(body.planId || "").trim().slice(0, 100);
+      if (!planId) return json({ error: "Choose a membership plan." }, 400, origin);
+      plan = await env.DB.prepare("SELECT id,name,slug,amount,currency,interval,paystack_plan_code,stripe_price_id,active FROM membership_plans WHERE id=?1 AND active=1 LIMIT 1").bind(planId).first();
+      if (!plan) return json({ error: "This membership plan is unavailable." }, 404, origin);
+      amount = Number(plan.amount);
+      currency = String(plan.currency || "GHS").toUpperCase();
+      planInterval = String(plan.interval || "monthly").toLowerCase();
+      if (!Number.isFinite(amount) || amount <= 0) return json({ error: "This membership plan does not have a valid price." }, 400, origin);
+      if (provider === "paystack" && !String(plan.paystack_plan_code || "").trim()) {
+        return json({ error: "This plan needs a Paystack recurring-plan code before Paystack membership checkout can be enabled. No payment was attempted." }, 503, origin);
+      }
+    } else {
+      amount = Number(body.amount);
+      if (!Number.isFinite(amount) || amount < 1 || amount > 1000000) return json({ error: "Donation amount must be between 1 and 1,000,000." }, 400, origin);
+      if (!["GHS", "USD", "GBP", "EUR", "NGN", "ZAR"].includes(currency)) return json({ error: "That currency is not supported by the checkout form." }, 400, origin);
+    }
+
+    const now = new Date().toISOString();
+    const transactionId = crypto.randomUUID();
+    const donationId = kind === "donation" ? crypto.randomUUID() : null;
+    const subscriptionId = kind === "subscription" ? crypto.randomUUID() : null;
+    const reference = "LK" + crypto.randomUUID().replace(/-/g, "").toUpperCase();
+    const name = String(body.name || "").trim().slice(0, 120);
+    const message = String(body.message || "").trim().slice(0, 500);
+    const insertStatements: any[] = [];
+    if (donationId) {
+      insertStatements.push(env.DB.prepare("INSERT INTO donations(id,donor_name,donor_email,amount,currency,provider,provider_reference,message,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'pending',?9,?9)")
+        .bind(donationId, name || null, email, amount, currency, provider, reference, message || null, now));
+    }
+    if (subscriptionId && plan) {
+      insertStatements.push(env.DB.prepare("INSERT INTO subscriptions(id,plan_id,plan,provider,provider_reference,amount,currency,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',?8,?8)")
+        .bind(subscriptionId, plan.id, String(plan.name), provider, reference, amount, currency, now));
+    }
+    insertStatements.push(env.DB.prepare("INSERT INTO payment_transactions(id,kind,provider,reference,email,amount,currency,donation_id,subscription_id,status,provider_response,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,'initiated','{}',?10,?10)")
+      .bind(transactionId, kind, provider, reference, email, amount, currency, donationId, subscriptionId, now));
+    await env.DB.batch(insertStatements);
+
+    let checkoutUrl = "";
+    let providerResponse: any = {};
+    try {
+      if (provider === "paystack") {
+        const callback = origin + "/pages/support.html?payment=" + encodeURIComponent(reference);
+        const payload: Record<string, any> = {
+          email,
+          currency,
+          reference,
+          callback_url: callback,
+          metadata: { reference, transaction_id: transactionId, kind, plan_id: plan?.id || null, donor_name: name || null }
+        };
+        if (kind === "subscription" && plan?.paystack_plan_code) payload.plan = String(plan.paystack_plan_code);
+        else payload.amount = String(Math.round(amount * 100));
+        const response = await fetch("https://api.paystack.co/transaction/initialize", {
+          method: "POST",
+          headers: { authorization: "Bearer " + env.PAYSTACK_SECRET_KEY, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15000)
+        });
+        const data = await response.json() as any;
+        if (!response.ok || !data.status || !data.data?.authorization_url || data.data.reference !== reference) {
+          throw new Error(String(data.message || "Paystack could not initialize this payment."));
+        }
+        checkoutUrl = String(data.data.authorization_url);
+        providerResponse = { provider: "paystack", reference, accessCode: data.data.access_code || null };
+      } else {
+        const session = new URLSearchParams();
+        session.set("mode", kind === "subscription" ? "subscription" : "payment");
+        session.set("customer_email", email);
+        session.set("client_reference_id", reference);
+        session.set("success_url", origin + "/pages/support.html?payment=" + encodeURIComponent(reference));
+        session.set("cancel_url", origin + "/pages/support.html?payment_cancelled=1");
+        session.set("metadata[reference]", reference);
+        session.set("metadata[transaction_id]", transactionId);
+        session.set("metadata[kind]", kind);
+        if (kind === "subscription" && plan?.stripe_price_id) {
+          session.set("line_items[0][price]", String(plan.stripe_price_id));
+          session.set("line_items[0][quantity]", "1");
+        } else {
+          session.set("line_items[0][quantity]", "1");
+          session.set("line_items[0][price_data][currency]", currency.toLowerCase());
+          session.set("line_items[0][price_data][unit_amount]", String(Math.round(amount * 100)));
+          session.set("line_items[0][price_data][product_data][name]", kind === "subscription" ? String(plan.name) : "LK Newsroom donation");
+          if (kind === "subscription") {
+            const interval = planInterval === "year" || planInterval === "yearly" || planInterval === "annual" ? "year" : "month";
+            session.set("line_items[0][price_data][recurring][interval]", interval);
+          }
+        }
+        session.set("payment_intent_data[metadata][reference]", reference);
+        const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+          method: "POST",
+          headers: { authorization: "Bearer " + env.STRIPE_SECRET_KEY, "content-type": "application/x-www-form-urlencoded" },
+          body: session.toString(),
+          signal: AbortSignal.timeout(15000)
+        });
+        const data = await response.json() as any;
+        if (!response.ok || !data.url || !data.id) {
+          throw new Error(String(data.error?.message || "Stripe could not initialize this payment."));
+        }
+        checkoutUrl = String(data.url);
+        providerResponse = { provider: "stripe", sessionId: String(data.id), reference };
+      }
+      await env.DB.prepare("UPDATE payment_transactions SET provider_response=?1,updated_at=?2 WHERE id=?3")
+        .bind(JSON.stringify(providerResponse), new Date().toISOString(), transactionId).run();
+      return json({ checkoutUrl, reference, kind }, 200, origin);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Checkout initialization failed.";
+      await env.DB.batch([
+        env.DB.prepare("UPDATE payment_transactions SET status='failed',provider_response=?1,updated_at=?2 WHERE id=?3").bind(JSON.stringify({ error: reason.slice(0, 250) }), new Date().toISOString(), transactionId),
+        ...(donationId ? [env.DB.prepare("UPDATE donations SET status='failed',updated_at=?1 WHERE id=?2").bind(new Date().toISOString(), donationId)] : []),
+        ...(subscriptionId ? [env.DB.prepare("UPDATE subscriptions SET status='failed',updated_at=?1 WHERE id=?2").bind(new Date().toISOString(), subscriptionId)] : [])
+      ]);
+      return json({ error: "Secure checkout could not be started. No payment was taken. " + reason.slice(0, 160) }, 502, origin);
+    }
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "Checkout request is invalid." }, 400, origin);
+  }
+}
+
+async function verifyPayment(reference: string, env: Env, origin: string) {
+  if (!/^[A-Za-z0-9.=+-]{8,150}$/.test(reference)) return json({ error: "Invalid payment reference." }, 400, origin);
+  const row = await env.DB.prepare("SELECT id,kind,provider,reference,email,amount,currency,donation_id,subscription_id,status,provider_response FROM payment_transactions WHERE reference=?1 LIMIT 1").bind(reference).first() as any;
+  if (!row) return json({ error: "Payment reference not found." }, 404, origin);
+  if (row.status === "paid") return json({ data: { reference: row.reference, status: "paid" } }, 200, origin);
+
+  let successful = false;
+  let paidAmount: number | null = null;
+  let paidCurrency = "";
+  let providerSubscriptionId: string | null = null;
+  let verifiedResponse: any = {};
+  const now = new Date().toISOString();
+  try {
+    if (row.provider === "paystack" && env.PAYSTACK_SECRET_KEY) {
+      const response = await fetch("https://api.paystack.co/transaction/verify/" + encodeURIComponent(reference), {
+        headers: { authorization: "Bearer " + env.PAYSTACK_SECRET_KEY },
+        signal: AbortSignal.timeout(12000)
+      });
+      const data = await response.json() as any;
+      const transaction = data.data || {};
+      paidAmount = Number(transaction.amount);
+      paidCurrency = String(transaction.currency || "").toUpperCase();
+      successful = Boolean(response.ok && data.status && transaction.status === "success" && transaction.reference === reference && paidAmount === Math.round(Number(row.amount) * 100) && paidCurrency === String(row.currency).toUpperCase());
+      providerSubscriptionId = transaction.subscription?.subscription_code || transaction.subscription_code || null;
+      verifiedResponse = { provider: "paystack", reference, status: transaction.status || "pending", verified: successful };
+    } else if (row.provider === "stripe" && env.STRIPE_SECRET_KEY) {
+      let saved: any = {};
+      try { saved = JSON.parse(String(row.provider_response || "{}")); } catch {}
+      const sessionId = String(saved.sessionId || "");
+      if (!sessionId) return json({ data: { reference: row.reference, status: row.status } }, 200, origin);
+      const response = await fetch("https://api.stripe.com/v1/checkout/sessions/" + encodeURIComponent(sessionId), {
+        headers: { authorization: "Bearer " + env.STRIPE_SECRET_KEY },
+        signal: AbortSignal.timeout(12000)
+      });
+      const session = await response.json() as any;
+      paidAmount = Number(session.amount_total);
+      paidCurrency = String(session.currency || "").toUpperCase();
+      const metadataRef = String(session.metadata?.reference || session.client_reference_id || "");
+      successful = Boolean(response.ok && session.payment_status === "paid" && metadataRef === reference && paidAmount === Math.round(Number(row.amount) * 100) && paidCurrency === String(row.currency).toUpperCase());
+      providerSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id || null;
+      verifiedResponse = { provider: "stripe", sessionId, status: session.payment_status || "pending", verified: successful };
+    } else {
+      return json({ error: "Payment verification is not configured for this provider." }, 503, origin);
+    }
+  } catch {
+    return json({ error: "Unable to verify this payment yet. Please try again." }, 503, origin);
+  }
+
+  if (successful) {
+    await env.DB.prepare("UPDATE payment_transactions SET status='paid',provider_response=?1,updated_at=?2 WHERE id=?3 AND status<>'paid'")
+      .bind(JSON.stringify(verifiedResponse), now, row.id).run();
+    if (row.donation_id) {
+      await env.DB.prepare("UPDATE donations SET status='paid',updated_at=?1 WHERE id=?2").bind(now, row.donation_id).run();
+    }
+    if (row.subscription_id) {
+      const sub = await env.DB.prepare("SELECT id,plan_id FROM subscriptions WHERE id=?1").bind(row.subscription_id).first() as any;
+      const plan = sub?.plan_id ? await env.DB.prepare("SELECT interval FROM membership_plans WHERE id=?1").bind(sub.plan_id).first() as any : null;
+      const end = addPlanEndDate(now, String(plan?.interval || "monthly"));
+      await env.DB.prepare("UPDATE subscriptions SET status='active',provider_subscription_id=COALESCE(?1,provider_subscription_id),start_date=COALESCE(start_date,?2),end_date=?3,updated_at=?2 WHERE id=?4")
+        .bind(providerSubscriptionId, now, end, row.subscription_id).run();
+    }
+    return json({ data: { reference: row.reference, status: "paid" } }, 200, origin);
+  }
+  return json({ data: { reference: row.reference, status: row.status === "failed" ? "failed" : "initiated" } }, 200, origin);
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -598,13 +810,9 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json({ error: "Unable to submit the advertising request." }, 503, origin);
     }
   }
-  if (path === "/v1/monetization/checkout" && request.method === "POST") {
-    return json({ error: "Secure payment checkout is not enabled on this Cloudflare preview yet. No payment was attempted." }, 501, origin);
-  }
+  if (path === "/v1/monetization/checkout" && request.method === "POST") return beginCheckout(request, env, origin);
   const paymentMatch = path.match(/^\/v1\/monetization\/payments\/([^/]+)$/);
-  if (paymentMatch && request.method === "GET") {
-    return json({ error: "Payment verification is not enabled on this Cloudflare preview yet." }, 501, origin);
-  }
+  if (paymentMatch && request.method === "GET") return verifyPayment(decodeURIComponent(paymentMatch[1]), env, origin);
   if (path === "/v1/advertisements" && request.method === "GET") {
     const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
     const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR starts_at<=datetime('now')) AND (ends_at IS NULL OR ends_at>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
