@@ -26,7 +26,7 @@ TABLE_COLUMNS = {
     "users_roles": ["user_id", "role", "assigned_at"],
     "profiles": ["id", "full_name", "avatar_url", "bio", "created_at", "updated_at"],
     "users_roles": ["user_id", "role", "assigned_at"],
-    "articles": ["id", "slug", "title", "excerpt", "content", "ai_summary", "featured_image_url", "original_url", "status", "featured", "breaking", "allow_comments", "scheduled_at", "published_at", "created_at", "updated_at", "meta_title", "meta_description", "canonical_url", "view_count", "category_id", "author_id", "source_id", "external_id", "external_author_id", "country", "source_updated_at", "content_hash", "auto_tags", "is_aggregated", "duplicate_of"],
+    "articles": ["id", "slug", "title", "excerpt", "content", "content_markdown", "ai_summary", "featured_image_url", "original_url", "status", "featured", "breaking", "allow_comments", "scheduled_at", "published_at", "created_at", "updated_at", "meta_title", "meta_description", "canonical_url", "view_count", "category_id", "author_id", "source_id", "external_id", "external_author_id", "country", "source_updated_at", "content_hash", "auto_tags", "is_aggregated", "duplicate_of"],
     "article_tags": ["article_id", "tag_id"],
     "breaking_news": ["id", "article_id", "source_id", "headline", "link_url", "active", "pinned", "starts_at", "ends_at", "created_at", "updated_at"],
     "live_updates": ["id", "article_id", "title", "body", "kind", "pinned", "published_at", "created_at"],
@@ -173,14 +173,8 @@ def count_csv_rows(path):
         return -1
 
 def find_table_csvs(root, table):
-    if table == "articles":
-        files = sorted(root.glob("LK-Newsroom-articles-part-*.csv"))
-        if files:
-            return files, sum(max(0, count_csv_rows(p)) for p in files), "verified root article batches"
-    if table == "social_graphics":
-        files = sorted(root.rglob("social-graphics-part-*.csv"))
-        if files:
-            return files, sum(max(0, count_csv_rows(p)) for p in files), "social graphics batch folder"
+    # Exports are stored in schema/table folders such as all-tables-export/public/articles
+    # and timestamped repair folders. Choose the most complete folder, not a guessed filename.
     groups = defaultdict(list)
     for file in root.rglob("part-*.csv"):
         if not file.is_file():
