@@ -82,7 +82,32 @@ npx wrangler d1 execute lk-newsroom-db --remote --command="SELECT COUNT(*) AS to
 
 Compare with the migration report. News ingestion can add stories after import, so counts can legitimately grow; unexpected missing rows must be reviewed rather than ignored.
 
-## 3. Copy actual Storage media to R2
+## 3. Archive CSV tables excluded from D1 to a private R2 bucket
+
+Historical logs, authentication exports, and Storage metadata can contain personal or operational data. Do **not** put those backups in the public `lk-newsroom-media` bucket. Create a separate private bucket:
+
+```powershell
+npx wrangler r2 bucket create lk-newsroom-private-media
+```
+
+Leave R2 public development URLs/custom domains disabled for this archive bucket. Create a separate R2 API token restricted to Object Read & Write for only `lk-newsroom-private-media`. Locally set `R2_ACCOUNT_ID`, `R2_PRIVATE_BUCKET_NAME=lk-newsroom-private-media`, `R2_PRIVATE_ACCESS_KEY_ID`, and `R2_PRIVATE_SECRET_ACCESS_KEY` in your uncommitted `.env`. Do not replace the existing public-media token or share either token in chat.
+
+First dry-run the CSV archive (no network uploads happen in dry-run mode):
+
+```powershell
+npx tsx scripts/archiveDatabaseCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup"
+```
+
+When the file count and size look right, apply it:
+
+```powershell
+npx tsx scripts/archiveDatabaseCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup" --apply
+```
+
+It uploads CSV export files—including excluded high-volume and auth/Storage metadata tables—to the **private** bucket with SHA-256 checksums, records a manifest locally and in R2, and preserves every local original. It does not archive secret files or alter/delete anything in Supabase. Keep the private bucket private.
+
+## 4. Copy actual Storage media to the public R2 bucket
+
 
 First do a dry run. From the repository root, create a local environment file (never commit it) that contains your existing server-only `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and R2 credentials. Do not paste those values into chat or a public file.
 
@@ -98,7 +123,7 @@ npx tsx scripts/migrateStorageCsvToR2.ts "$env:USERPROFILE\Desktop\LK-Newsroom-C
 
 If Supabase returns a restriction/authentication error, stop and preserve the mapping/report; do not repeatedly hammer the old project. Confirm every desired object has status `copied`, then rebuild the SQL with the resulting media map before importing it into a fresh D1 database. Private buckets are deliberately not auto-copied; their access policy needs a separate decision.
 
-## 4. Build and deploy a preview only
+## 5. Build and deploy a preview only
 
 Build the static assets with the special preview client (it removes the browser's Supabase dependency and excludes server folders):
 
@@ -121,7 +146,7 @@ For Paystack, configure its webhook to the deployed Worker URL ending in `/v1/we
 
 Cron is scheduled every five minutes (UTC). Do not remove the existing Render/Railway scheduler while preview testing. The database lock prevents overlapping Worker runs, and the query deduplication checks existing source/external IDs; this is not a reason to run two production ingestion systems indefinitely.
 
-## 5. Admin and final domain cutover
+## 6. Admin and final domain cutover
 
 The admin route on this branch is a placeholder. The existing Supabase Auth users/sessions and encrypted social OAuth tokens are not portable to D1 via the CSV importer. Staff authentication, role enforcement, article editing/publishing, file uploads, settings, social account reconnection, notification delivery, and company/admin tools must be completed and tested before production cutover.
 
