@@ -269,17 +269,18 @@ async function fetchApiSource(source: any, env: Env): Promise<any[]> {
   const secretName = String(source.api_secret_name || "").toUpperCase();
   if (secretName === "NEWS_API_KEY" && env.NEWS_API_KEY) {
     const endpoint = String(source.api_endpoint || "https://newsapi.org/v2/top-headlines");
-    const url = new URL(endpoint);
-    url.searchParams.set("pageSize", "50");
     const countryCodes: Record<string, string> = {
       "United States": "us", "United Kingdom": "gb", "Nigeria": "ng",
       "South Africa": "za", "Canada": "ca", "India": "in", "Australia": "au"
     };
     const countryCode = countryCodes[String(source.country || "")];
+    const useTopHeadlines = endpoint.includes("top-headlines") && Boolean(countryCode);
+    const url = new URL(useTopHeadlines ? endpoint : (endpoint.includes("top-headlines") ? "https://newsapi.org/v2/everything" : endpoint));
+    url.searchParams.set("pageSize", "50");
     const category = String(source.default_category || "").toLowerCase();
     const categories = new Set(["business", "entertainment", "general", "health", "science", "sports", "technology"]);
-    if (endpoint.includes("top-headlines") && countryCode) {
-      url.searchParams.set("country", countryCode);
+    if (useTopHeadlines) {
+      url.searchParams.set("country", countryCode!);
       if (categories.has(category)) url.searchParams.set("category", category);
     } else {
       url.searchParams.set("language", "en");
