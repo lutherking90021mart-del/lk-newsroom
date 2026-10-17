@@ -95,6 +95,17 @@ JSON_COLUMNS = {
 }
 REQUIRED = {
     "categories": {"id", "name", "slug"},
+    "profiles": {"id", "full_name"},
+    "users_roles": {"user_id", "role"},
+    "advertising_packages": {"id", "title", "slug", "placement", "price", "currency", "duration_days"},
+    "social_accounts": {"id", "platform", "display_name", "account_id"},
+    "social_templates": {"id", "slug", "name", "category_slug", "accent_color", "background_color", "font_family"},
+    "social_graphics": {"id", "article_id", "assets"},
+    "notification_subscriptions": {"id", "email", "push_subscription", "preferences", "source", "active"},
+    "daily_briefs": {"id", "title", "summary", "articles", "sent_date", "status"},
+    "notifications": {"id", "title", "message", "type", "metadata", "read_status"},
+    "notification_deliveries": {"id", "notification_id", "subscription_id", "channel", "status", "attempts", "max_attempts"},
+    "notification_campaigns": {"id", "title", "message", "type", "audience_preferences", "category_slugs", "channels", "scheduled_for", "status"},
     "news_sources": {"id", "slug", "name"},
     "authors": {"id", "name", "slug"},
     "tags": {"id", "name", "slug"},
