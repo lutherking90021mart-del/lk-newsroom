@@ -259,6 +259,80 @@ async function parseFeed(source: any): Promise<any[]> {
   }).filter((item: any) => item.title && item.url);
 }
 
+async function fetchApiSource(source: any, env: Env): Promise<any[]> {
+  const secretName = String(source.api_secret_name || "").toUpperCase();
+  if (secretName === "NEWS_API_KEY" && env.NEWS_API_KEY) {
+    const endpoint = String(source.api_endpoint || "https://newsapi.org/v2/top-headlines");
+    const url = new URL(endpoint);
+    url.searchParams.set("pageSize", "50");
+    const countryCodes: Record<string, string> = {
+      "United States": "us", "United Kingdom": "gb", "Nigeria": "ng",
+      "South Africa": "za", "Canada": "ca", "India": "in", "Australia": "au"
+    };
+    const countryCode = countryCodes[String(source.country || "")];
+    const category = String(source.default_category || "").toLowerCase();
+    const categories = new Set(["business", "entertainment", "general", "health", "science", "sports", "technology"]);
+    if (endpoint.includes("top-headlines") && countryCode) {
+      url.searchParams.set("country", countryCode);
+      if (categories.has(category)) url.searchParams.set("category", category);
+    } else {
+      url.searchParams.set("language", "en");
+      url.searchParams.set("sortBy", "publishedAt");
+      url.searchParams.set("q", String(source.country || "").toLowerCase() === "ghana" ? "Ghana OR Ghanaian" : (source.default_category || source.name || "World"));
+    }
+    const response = await fetch(url, {
+      headers: { "X-Api-Key": env.NEWS_API_KEY, "accept": "application/json" },
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!response.ok) throw new Error("News API returned HTTP " + response.status);
+    const body = await response.json() as any;
+    if (body.status !== "ok") throw new Error(String(body.message || "News API returned an invalid response"));
+    return asList(body.articles).map((item: any) => {
+      const urlValue = String(item.url || "");
+      return {
+        url: urlValue,
+        title: cleanHtml(item.title),
+        summary: cleanHtml(item.description || ""),
+        content: cleanHtml(item.content || item.description || ""),
+        published: safeDate(item.publishedAt),
+        external: String(item.url || item.urlToImage || item.title || ""),
+        image: String(item.urlToImage || "") || null
+      };
+    }).filter((item: any) => item.title && item.url);
+  }
+  if (secretName === "GUARDIAN_API_KEY" && env.GUARDIAN_API_KEY) {
+    const url = new URL(source.api_endpoint || "https://content.guardianapis.com/search");
+    url.searchParams.set("api-key", env.GUARDIAN_API_KEY);
+    url.searchParams.set("page-size", "50");
+    url.searchParams.set("order-by", "newest");
+    url.searchParams.set("show-fields", "trailText,bodyText,thumbnail,byline");
+    const response = await fetch(url, { headers: { "accept": "application/json" }, signal: AbortSignal.timeout(12000) });
+    if (!response.ok) throw new Error("Guardian API returned HTTP " + response.status);
+    const body = await response.json() as any;
+    if (body.response?.status !== "ok") throw new Error("Guardian API returned an invalid response");
+    return asList(body.response.results).map((item: any) => {
+      const fields = item.fields || {};
+      const urlValue = String(item.webUrl || "");
+      return {
+        url: urlValue,
+        title: cleanHtml(item.webTitle),
+        summary: cleanHtml(fields.trailText || ""),
+        content: cleanHtml(fields.bodyText || fields.trailText || ""),
+        published: safeDate(item.webPublicationDate),
+        external: String(item.id || urlValue),
+        image: String(fields.thumbnail || "") || null
+      };
+    }).filter((item: any) => item.title && item.url);
+  }
+  throw new Error("This API source is not configured. Add its server-side API key in Cloudflare Secrets before enabling it.");
+}
+
+async function fetchSourceEntries(source: any, env: Env): Promise<any[]> {
+  if (String(source.source_type || "rss").toLowerCase() === "rss") return parseFeed(source);
+  if (String(source.source_type || "").toLowerCase() === "api") return fetchApiSource(source, env);
+  throw new Error("Unsupported source type: " + String(source.source_type || "unknown"));
+}
+
 async function upsertFeedArticles(env: Env, source: any, entries: any[], categoryId: string, categoryStatement: any) {
   if (!entries.length) {
     if (categoryStatement) await env.DB.batch([categoryStatement]);
@@ -318,13 +392,13 @@ async function runFeedSync(env: Env) {
   const started = new Date().toISOString();
   const runId = crypto.randomUUID();
   await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
-  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND source_type='rss' AND feed_url IS NOT NULL ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").all();
+  const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1)))) ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0).all();
   let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
   const categoryCache = new Map<string, string>();
   for (const source of (sources.results || []) as any[]) {
     const began = Date.now();
     try {
-      const entries = (await parseFeed(source)).slice(0, 12);
+      const entries = (await fetchSourceEntries(source, env)).slice(0, 12);
       fetched += entries.length;
       const category = await resolveCategory(env, String(source.default_category || "World"), categoryCache);
       const counts = await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
