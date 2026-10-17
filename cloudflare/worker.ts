@@ -1247,6 +1247,77 @@ async function handleAdminQuery(request: Request, env: Env, origin: string) {
   }
 }
 
+const ADMIN_MEDIA_BUCKETS = new Set(["news-images", "social-graphics"]);
+function cleanObjectPath(value: unknown) {
+  const path = String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!path || path.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Invalid media path.");
+  return path;
+}
+function publicMediaUrl(key: string, env: Env) {
+  const base = String(env.R2_PUBLIC_BASE_URL || "").replace(/\/$/, "");
+  return base ? base + "/" + encodeKey(key) : "";
+}
+async function handleAdminMedia(request: Request, env: Env, origin: string) {
+  const session = await getAdminSession(request, env);
+  if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+  if (!["super_admin", "admin", "editor", "journalist"].includes(session.role)) return json({ error: "Your role cannot manage media." }, 403, origin);
+  if (request.method === "GET") {
+    const url = new URL(request.url);
+    const bucket = String(url.searchParams.get("bucket") || "news-images");
+    if (!ADMIN_MEDIA_BUCKETS.has(bucket)) return json({ error: "Unsupported media bucket." }, 400, origin);
+    const prefix = url.searchParams.get("prefix") ? cleanObjectPath(url.searchParams.get("prefix")) : "";
+    const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") || 100) || 100));
+    const listed = await env.MEDIA.list({ prefix: bucket + "/" + prefix, limit });
+    const data = (listed.objects || []).map((object: any) => {
+      const key = String(object.key || "");
+      return {
+        name: key.startsWith(bucket + "/") ? key.slice(bucket.length + 1) : key,
+        id: object.etag || key,
+        metadata: object.customMetadata || {},
+        created_at: object.uploaded || null,
+        updated_at: object.uploaded || null,
+        last_accessed_at: null,
+        size: object.size || 0
+      };
+    });
+    return json({ data, hasMore: Boolean(listed.truncated), nextCursor: listed.cursor || null }, 200, origin);
+  }
+  if (request.method === "POST") {
+    let form: FormData;
+    try { form = await request.formData(); } catch { return json({ error: "Use multipart form data to upload media." }, 400, origin); }
+    const bucket = String(form.get("bucket") || "news-images");
+    if (!ADMIN_MEDIA_BUCKETS.has(bucket)) return json({ error: "Unsupported media bucket." }, 400, origin);
+    const file = form.get("file");
+    if (!(file instanceof File)) return json({ error: "Choose a file to upload." }, 400, origin);
+    const contentType = String(form.get("contentType") || file.type || "application/octet-stream").toLowerCase();
+    const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/svg+xml", "video/mp4", "video/webm"]);
+    if (!allowed.has(contentType)) return json({ error: "Unsupported media file type." }, 415, origin);
+    const maxBytes = contentType.startsWith("video/") ? 25 * 1024 * 1024 : 12 * 1024 * 1024;
+    if (file.size <= 0 || file.size > maxBytes) return json({ error: contentType.startsWith("video/") ? "Videos must be no larger than 25 MB on this preview." : "Images must be no larger than 12 MB." }, 413, origin);
+    let path = "";
+    try {
+      const givenPath = String(form.get("path") || "").trim();
+      path = givenPath ? cleanObjectPath(givenPath) : crypto.randomUUID() + "-" + file.name.replace(/[^\w.\-]/g, "_");
+    } catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid media path." }, 400, origin); }
+    const key = bucket + "/" + path;
+    const buffer = await file.arrayBuffer();
+    await env.MEDIA.put(key, buffer, { httpMetadata: { contentType, cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { uploaded_by: session.user_id, uploaded_at: new Date().toISOString() } });
+    return json({ data: { path, id: key, fullPath: key }, publicUrl: publicMediaUrl(key, env) }, 200, origin);
+  }
+  if (request.method === "DELETE") {
+    let body: any;
+    try { body = await request.json(); } catch { return json({ error: "Invalid media delete request." }, 400, origin); }
+    const bucket = String(body.bucket || "news-images");
+    if (!ADMIN_MEDIA_BUCKETS.has(bucket)) return json({ error: "Unsupported media bucket." }, 400, origin);
+    const paths = Array.isArray(body.paths) ? body.paths.slice(0, 100) : [];
+    const keys = paths.map((value: unknown) => bucket + "/" + cleanObjectPath(value));
+    if (!keys.length) return json({ data: [] }, 200, origin);
+    await env.MEDIA.delete(keys);
+    return json({ data: paths.map((name: unknown) => ({ name: String(name) })) }, 200, origin);
+  }
+  return json({ error: "Method not allowed." }, 405, origin);
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -1272,6 +1343,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ data: rows.results || [] }, 200, origin);
   }
   if (path === "/v1/admin/query" && request.method === "POST") return handleAdminQuery(request, env, origin);
+  if (path === "/v1/admin/media" && ["GET", "POST", "DELETE"].includes(request.method)) return handleAdminMedia(request, env, origin);
   if (path === "/v1/admin/forgot-password" && request.method === "POST") {
     return json({ error: "Email password resets are not configured on this Cloudflare deployment. Ask a super admin to issue a new staff login password." }, 501, origin);
   }
