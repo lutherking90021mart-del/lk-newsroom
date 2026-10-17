@@ -548,6 +548,63 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!env.CRON_SECRET || token !== env.CRON_SECRET) return json({ error: "Unauthorized" }, 401, origin);
     return json({ data: await runFeedSync(env) }, 200, origin);
   }
+  if (path === "/v1/monetization/packages" && request.method === "GET") {
+    try {
+      const [packageRows, planRows] = await Promise.all([
+        env.DB.prepare("SELECT id,title,slug,description,placement,price,currency,duration_days,features,active,sort_order FROM advertising_packages WHERE active=1 ORDER BY sort_order ASC,title ASC").all(),
+        env.DB.prepare("SELECT id,name,slug,description,features,amount,currency,interval,active,sort_order FROM membership_plans WHERE active=1 ORDER BY sort_order ASC,name ASC").all()
+      ]);
+      const unpackFeatures = (value: unknown) => {
+        if (Array.isArray(value)) return value;
+        if (typeof value !== "string") return [];
+        try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+      };
+      return json({
+        packages: (packageRows.results || []).map((item: any) => ({ ...item, features: unpackFeatures(item.features) })),
+        plans: (planRows.results || []).map((item: any) => ({ ...item, features: unpackFeatures(item.features) }))
+      }, 200, origin);
+    } catch {
+      return json({ error: "Advertising and membership packages are temporarily unavailable." }, 503, origin);
+    }
+  }
+  if (path === "/v1/monetization/advertiser-requests" && request.method === "POST") {
+    try {
+      const body = await request.json() as any;
+      const companyName = String(body.companyName || "").trim().slice(0, 160);
+      const contactName = String(body.contactName || "").trim().slice(0, 100);
+      const email = String(body.email || "").trim().toLowerCase().slice(0, 254);
+      const phone = String(body.phone || "").trim().slice(0, 60);
+      const website = String(body.website || "").trim().slice(0, 500);
+      const packageId = String(body.packageId || "").trim().slice(0, 100) || null;
+      const advertisementType = String(body.advertisementType || body.advertiseType || "display").trim().slice(0, 60);
+      const placement = String(body.placement || "").trim().slice(0, 100) || null;
+      const budgetValue = Number(body.budget);
+      const durationValue = Number(body.durationDays);
+      const budget = body.budget !== undefined && body.budget !== "" && Number.isFinite(budgetValue) && budgetValue >= 0 ? budgetValue : null;
+      const duration = body.durationDays !== undefined && body.durationDays !== "" && Number.isInteger(durationValue) && durationValue >= 1 && durationValue <= 366 ? durationValue : null;
+      const goal = String(body.goal || "").trim().slice(0, 600);
+      const message = String(body.message || "").trim().slice(0, 3000);
+      const currency = String(body.currency || "GHS").toUpperCase();
+      if (companyName.length < 2 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return json({ error: "Enter a company name and a valid email address." }, 400, origin);
+      }
+      if (website && !/^https?:\/\//i.test(website)) return json({ error: "Website must begin with https:// or http://." }, 400, origin);
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      await env.DB.prepare("INSERT INTO advertiser_requests(id,package_id,company_name,contact_name,email,phone,website,advertisement_type,requested_placement,budget,currency,campaign_duration_days,campaign_goal,message,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'pending',?15,?15)")
+        .bind(id, packageId, companyName, contactName || null, email, phone || null, website || null, advertisementType, placement, budget, currency, duration, goal || null, message || null, now).run();
+      return json({ ok: true, id, status: "pending", message: "Your advertising request was sent for review. No payment has been taken." }, 201, origin);
+    } catch {
+      return json({ error: "Unable to submit the advertising request." }, 503, origin);
+    }
+  }
+  if (path === "/v1/monetization/checkout" && request.method === "POST") {
+    return json({ error: "Secure payment checkout is not enabled on this Cloudflare preview yet. No payment was attempted." }, 501, origin);
+  }
+  const paymentMatch = path.match(/^\/v1\/monetization\/payments\/([^/]+)$/);
+  if (paymentMatch && request.method === "GET") {
+    return json({ error: "Payment verification is not enabled on this Cloudflare preview yet." }, 501, origin);
+  }
   if (path === "/v1/advertisements" && request.method === "GET") {
     const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
     const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR starts_at<=datetime('now')) AND (ends_at IS NULL OR ends_at>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
