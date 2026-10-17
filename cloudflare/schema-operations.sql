@@ -359,6 +359,57 @@ CREATE TABLE IF NOT EXISTS company_staff_profiles (
   updated_at TEXT
 );
 
+
+
+-- Cloudflare-native admin accounts and sessions. Supabase password/session rows are
+-- intentionally not imported; existing staff must enrol with new passwords.
+CREATE TABLE IF NOT EXISTS admin_users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  full_name TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  password_iterations INTEGER NOT NULL DEFAULT 150000,
+  role TEXT NOT NULL DEFAULT 'journalist' CHECK(role IN ('super_admin','admin','editor','journalist','moderator')),
+  active INTEGER NOT NULL DEFAULT 1,
+  must_change_password INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admin_users_role ON admin_users(role, active);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_seen_at TEXT,
+  revoked_at TEXT,
+  user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_user ON admin_sessions(user_id, expires_at);
+CREATE TABLE IF NOT EXISTS admin_login_attempts (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  successful INTEGER NOT NULL DEFAULT 0,
+  attempted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_login_attempts_recent ON admin_login_attempts(email, successful, attempted_at);
+
+-- Keep the legacy page-views view/report screen functioning; historical rows remain archived.
+CREATE TABLE IF NOT EXISTS page_views (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  visitor_hash TEXT,
+  country TEXT,
+  device TEXT,
+  browser TEXT,
+  traffic_source TEXT,
+  viewed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_page_views_viewed_at ON page_views(viewed_at DESC);
+
 CREATE TABLE IF NOT EXISTS membership_plans (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
