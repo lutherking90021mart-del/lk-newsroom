@@ -182,6 +182,19 @@ async function mediaRecordManager(kind){
 }
 
 async function usersManager(){
+  if(!window.LK_CLOUDFLARE_MODE){
+    viewLoading();
+    const db=api();
+    const {data}=await result(db.from('users_roles').select('user_id,role,profiles(full_name,avatar_url)').order('assigned_at',{ascending:false}));
+    const rows=data||[];
+    $('#admin-view').innerHTML=`<section class="panel"><h3>Newsroom user roles</h3><p class="form-help">Create accounts in Supabase Authentication first. Super admins can assign roles here.</p><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>User ID</th><th>Role</th></tr></thead><tbody>${rows.map(row=>`<tr><td><strong>${esc(row.profiles?.full_name||'Unnamed user')}</strong></td><td class="meta">${esc(row.user_id)}</td><td><select class="role-select form-control" data-id="${row.user_id}">${['super_admin','admin','editor','journalist','moderator'].map(role=>`<option ${row.role===role?'selected':''}>${role}</option>`).join('')}</select></td></tr>`).join('')||'<tr><td colspan="3" class="text-muted">No assigned newsroom roles yet.</td></tr>'}</tbody></table></div></section>`;
+    document.querySelectorAll('.role-select').forEach(select=>select.addEventListener('change',async()=>{
+      try{await result(db.from('users_roles').update({role:select.value}).eq('user_id',select.dataset.id));toast('Role updated.');}
+      catch(error){toast(error.message||'Could not update role.');}
+    }));
+    return;
+  }
+
   const view=$('#admin-view');
   const isSuperAdmin=access?.role==='super_admin';
   if(!isSuperAdmin){
