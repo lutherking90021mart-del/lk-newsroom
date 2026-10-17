@@ -739,6 +739,31 @@ async function verifyPayment(reference: string, env: Env, origin: string) {
   return json({ data: { reference: row.reference, status: row.status === "failed" ? "failed" : "initiated" } }, 200, origin);
 }
 
+function fixedTimeEquals(left: string, right: string) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let i = 0; i < left.length; i++) difference |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return difference === 0;
+}
+
+async function handlePaystackWebhook(request: Request, env: Env, origin: string) {
+  if (!env.PAYSTACK_SECRET_KEY) return json({ error: "Paystack webhook is not configured." }, 503, origin);
+  const signature = request.headers.get("x-paystack-signature") || "";
+  if (!signature || signature.length > 256) return json({ error: "Missing Paystack signature." }, 401, origin);
+  const raw = await request.text();
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.PAYSTACK_SECRET_KEY), { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
+  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
+  const expected = Array.from(new Uint8Array(signed), byte => byte.toString(16).padStart(2, "0")).join("");
+  if (!fixedTimeEquals(signature.toLowerCase(), expected)) return json({ error: "Invalid Paystack signature." }, 401, origin);
+  let event: any;
+  try { event = JSON.parse(raw); } catch { return json({ error: "Invalid webhook body." }, 400, origin); }
+  if (event.event === "charge.success" && event.data?.reference) {
+    const verified = await verifyPayment(String(event.data.reference), env, origin);
+    if (verified.status >= 500) return json({ error: "Payment verification will be retried." }, 503, origin);
+  }
+  return json({ received: true }, 200, origin);
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -747,6 +772,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return env.ASSETS.fetch(new Request(new URL("/admin-migration.html", url.origin).toString(), { method: "GET", headers: { accept: "text/html" } }));
   }
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "Content-Type,Authorization", "access-control-max-age": "86400" } });
+  if (path === "/v1/webhooks/paystack" && request.method === "POST") return handlePaystackWebhook(request, env, origin);
   if (path === "/health" || path === "/v1/health") {
     try {
       await env.DB.prepare("SELECT 1 AS ok").first();
