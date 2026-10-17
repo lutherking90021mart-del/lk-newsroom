@@ -1009,10 +1009,7 @@ async function adminTableInfo(env: Env, table: string) {
 }
 function adminRoleCanRead(role: string, table: string) {
   if (!ADMIN_TABLES.has(table)) return false;
-  if (role === "super_admin" || role === "admin") {
-    if (role === "admin" && ["settings", "users_roles", "payment_transactions", "donations", "subscriptions"].includes(table)) return false;
-    return true;
-  }
+  if (role === "super_admin" || role === "admin") return true;
   return (ADMIN_TABLE_ROLE_ALLOWLIST[role] || []).includes(table);
 }
 function adminRoleCanWrite(role: string, table: string) {
@@ -1258,6 +1255,26 @@ async function route(request: Request, env: Env): Promise<Response> {
     return env.ASSETS.fetch(new Request(new URL("/admin-migration.html", url.origin).toString(), { method: "GET", headers: { accept: "text/html" } }));
   }
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "Content-Type,Authorization", "access-control-max-age": "86400" } });
+  if (path === "/v1/admin/bootstrap" && request.method === "POST") return handleAdminBootstrap(request, env, origin);
+  if (path === "/v1/admin/login" && request.method === "POST") return handleAdminLogin(request, env, origin);
+  if (path === "/v1/admin/logout" && request.method === "POST") return handleAdminLogout(request, env, origin);
+  if (path === "/v1/admin/password" && request.method === "POST") return handleAdminChangePassword(request, env, origin);
+  if (path === "/v1/admin/me" && request.method === "GET") {
+    const session = await getAdminSession(request, env);
+    return session ? json({ user: session.user }, 200, origin) : json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+  }
+  if (path === "/v1/admin/staff" && request.method === "POST") return handleAdminCreateStaff(request, env, origin);
+  if (path === "/v1/admin/staff" && request.method === "GET") {
+    const session = await getAdminSession(request, env);
+    if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+    if (session.role !== "super_admin") return json({ error: "Only a super admin can list staff accounts." }, 403, origin);
+    const rows = await env.DB.prepare("SELECT id,email,full_name,role,active,must_change_password,created_at,last_login_at FROM admin_users ORDER BY created_at DESC LIMIT 500").all();
+    return json({ data: rows.results || [] }, 200, origin);
+  }
+  if (path === "/v1/admin/query" && request.method === "POST") return handleAdminQuery(request, env, origin);
+  if (path === "/v1/admin/forgot-password" && request.method === "POST") {
+    return json({ error: "Email password resets are not configured on this Cloudflare deployment. Ask a super admin to issue a new staff login password." }, 501, origin);
+  }
   if (path === "/v1/webhooks/paystack" && request.method === "POST") return handlePaystackWebhook(request, env, origin);
   if (path === "/health" || path === "/v1/health") {
     try {
