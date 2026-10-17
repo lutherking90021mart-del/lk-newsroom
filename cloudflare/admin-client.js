@@ -179,7 +179,10 @@ const auth = {
     if (!session) return { data: null, error: errorObject("Your admin session has expired.", 401) };
     const { response, payload } = await apiRequest("/v1/admin/password", { method: "POST", body: JSON.stringify({ currentPassword: password?.current, newPassword: password?.new }) });
     if (!response.ok) return { data: null, error: errorObject(payload.error, response.status) };
-    return { data: { user: session.user }, error: null };
+    const remembered = (() => { try { return Boolean(localStorage.getItem(SESSION_KEY)); } catch { return false; } })();
+    const updated = { ...session, user: { ...session.user, must_change_password: false } };
+    storeSession(updated, remembered);
+    return { data: { user: updated.user }, error: null };
   }
 };
 export const configured = true;
