@@ -1247,6 +1247,9 @@ async function handleAdminQuery(request: Request, env: Env, origin: string) {
   }
 }
 
+function encodeKey(key: string) {
+  return key.split("/").map(part => encodeURIComponent(part).replace(/[!'()*]/g, char => "%" + char.charCodeAt(0).toString(16).toUpperCase())).join("/");
+}
 const ADMIN_MEDIA_BUCKETS = new Set(["news-images", "social-graphics"]);
 function cleanObjectPath(value: unknown) {
   const path = String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
