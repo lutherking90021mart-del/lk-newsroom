@@ -317,6 +317,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const origin = env.PUBLIC_ORIGIN || url.origin;
+  if (path === "/admin" || path.startsWith("/admin/")) {
+    return env.ASSETS.fetch(new Request(new URL("/admin-migration.html", url.origin).toString(), { method: "GET", headers: { accept: "text/html" } }));
+  }
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "Content-Type,Authorization", "access-control-max-age": "86400" } });
   if (path === "/health" || path === "/v1/health") {
     try {
@@ -331,6 +334,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
     if (!env.CRON_SECRET || token !== env.CRON_SECRET) return json({ error: "Unauthorized" }, 401, origin);
     return json({ data: await runFeedSync(env) }, 200, origin);
+  }
+  if (path === "/v1/advertisements" && request.method === "GET") {
+    const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
+    const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR starts_at<=datetime('now')) AND (ends_at IS NULL OR ends_at>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
+    return json({ data: rows.results || [] }, 200, origin);
   }
   if (path === "/v1/news" && request.method === "GET") return publicNews(request, env);
   if (path === "/v1/breaking" && request.method === "GET") return publicBreaking(env);
@@ -352,6 +360,20 @@ async function route(request: Request, env: Env): Promise<Response> {
     } catch (e) {
       return json({ error: "Unable to submit comment" }, 503, origin);
     }
+  }
+  const viewMatch = path.match(/^\/v1\/news\/([^/]+)\/view$/);
+  if (viewMatch && request.method === "POST") {
+    const identifier = decodeURIComponent(viewMatch[1]);
+    const result = await env.DB.prepare("UPDATE articles SET view_count=COALESCE(view_count,0)+1 WHERE (id=?1 OR slug=?1) AND status='published'").bind(identifier).run();
+    const changes = Number(result?.meta?.changes || 0);
+    return json({ ok: changes > 0 }, changes > 0 ? 202 : 404, origin);
+  }
+  const adEventMatch = path.match(/^\/v1\/analytics\/advertisements\/([^/]+)\/(impression|click)$/);
+  if (adEventMatch && request.method === "POST") {
+    const column = adEventMatch[2] === "click" ? "clicks" : "impressions";
+    const result = await env.DB.prepare("UPDATE advertisements SET " + column + "=COALESCE(" + column + ",0)+1 WHERE id=?1 AND active=1").bind(decodeURIComponent(adEventMatch[1])).run();
+    const changes = Number(result?.meta?.changes || 0);
+    return json({ ok: changes > 0 }, 202, origin);
   }
   const newsMatch = path.match(/^\/v1\/news\/([^/]+)$/);
   if (newsMatch && request.method === "GET") return publicArticle(newsMatch[1], env);
