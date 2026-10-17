@@ -111,8 +111,8 @@ function packArticle(row: Record<string, any>) {
   article.auto_tags = autoTags(row.auto_tags);
   return article;
 }
-const articleSelect = "a.id,a.slug,a.title,a.excerpt,a.content,a.ai_summary,a.featured_image_url,a.original_url,a.status,a.featured,a.breaking,a.allow_comments,a.scheduled_at,a.published_at,a.created_at,a.updated_at,a.meta_title,a.meta_description,a.canonical_url,a.view_count,a.category_id,a.author_id,a.source_id,a.external_id,a.external_author_id,a.country,a.source_updated_at,a.content_hash,a.auto_tags,a.is_aggregated,a.duplicate_of,c.name AS category_name,c.slug AS category_slug,s.name AS source_name,s.slug AS source_slug,au.name AS author_name,au.slug AS author_slug,au.avatar_url AS author_avatar";
-const articleJoin = " FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id LEFT JOIN authors au ON au.id=a.external_author_id ";
+const articleSelect = "a.id,a.slug,a.title,a.excerpt,a.content,a.content_markdown,a.ai_summary,a.featured_image_url,a.original_url,a.status,a.featured,a.breaking,a.allow_comments,a.scheduled_at,a.published_at,a.created_at,a.updated_at,a.meta_title,a.meta_description,a.canonical_url,a.view_count,a.category_id,a.author_id,a.source_id,a.external_id,a.external_author_id,a.country,a.source_updated_at,a.content_hash,a.auto_tags,a.is_aggregated,a.duplicate_of,c.name AS category_name,c.slug AS category_slug,s.name AS source_name,s.slug AS source_slug,au.name AS author_name,au.slug AS author_slug,au.avatar_url AS author_avatar";
+const articleJoin = " FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id LEFT JOIN authors au ON au.id=a.author_id ";
 function articleQuery(env: Env, where: string) {
   return env.DB.prepare("SELECT " + articleSelect + articleJoin + where);
 }
