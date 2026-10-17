@@ -190,7 +190,7 @@ async function usersManager(){
   }
   viewLoading('Loading Cloudflare newsroom accounts…');
   const {data:{session}}=await supabase.auth.getSession();
-  const response=await fetch(`${String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')}/v1/admin/staff`,{headers:{Authorization:`Bearer ${session?.access_token||''}`}});
+  const response=await fetch(`${String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'')}/v1/admin/staff`,{headers:{Authorization:`Bearer ${session?.access_token||''}`}});
   const payload=await response.json().catch(()=>({}));
   if(!response.ok)throw new Error(payload.error||'Could not load Cloudflare staff accounts.');
   const rows=payload.data||[];
@@ -217,7 +217,7 @@ async function usersManager(){
     event.preventDefault();const form=event.currentTarget;const button=form.querySelector('[type="submit"]');button.disabled=true;
     try{
       const fields=form.elements;
-      const result=await fetch(`${String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')}/v1/admin/staff`,{method:'POST',headers:{Authorization:`Bearer ${session?.access_token||''}`,'Content-Type':'application/json'},body:JSON.stringify({fullName:fields.fullName.value,email:fields.email.value,password:fields.password.value,role:fields.role.value})});
+      const result=await fetch(`${String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'')}/v1/admin/staff`,{method:'POST',headers:{Authorization:`Bearer ${session?.access_token||''}`,'Content-Type':'application/json'},body:JSON.stringify({fullName:fields.fullName.value,email:fields.email.value,password:fields.password.value,role:fields.role.value})});
       const data=await result.json().catch(()=>({}));
       if(!result.ok)throw new Error(data.error||'Could not create staff login.');
       toast('Cloudflare staff account created. Share the login privately with the teammate.');
