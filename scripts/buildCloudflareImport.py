@@ -166,7 +166,7 @@ TABLE_ORDER = [
     "social_graphics", "social_accounts", "social_posts", "notification_subscriptions",
     "daily_briefs", "notifications", "notification_deliveries", "notification_campaigns",
     "worker_runs"
-}
+]
 ARCHIVE_ONLY = ["feed_logs", "social_logs", "analytics_events", "page_views", "storage.objects", "storage.migrations", "storage.buckets"]
 
 def norm_dir(name):
