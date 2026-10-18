@@ -12,7 +12,11 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Builder = Join-Path $RepoRoot 'scripts\buildCloudflareImport.py'
 $SchemaFile = Join-Path $RepoRoot 'cloudflare\schema.sql'
 $OperationsSchemaFile = Join-Path $RepoRoot 'cloudflare\schema-operations.sql'
+$Splitter = Join-Path $RepoRoot 'scripts\splitCloudflareD1Import.py'
 $WranglerConfig = Join-Path $RepoRoot 'wrangler.jsonc'
+$ProgressPath = Join-Path $BackupPath 'cloudflare-d1-migration-progress.json'
+$ImportBatchSize = 30000
+$DailyWriteBudget = 60000
 
 function Write-Step([string]$Message) {
     Write-Host ''
@@ -93,6 +97,27 @@ function Invoke-D1Query([string]$Sql) {
         if ($set.result -and $set.result.results -and $set.result.results.Count -gt 0) { return $set.result.results[0] }
     }
     throw ('Cloudflare returned no SQL result rows. Output: ' + $raw)
+}
+
+function Save-MigrationProgress($Progress) {
+    $json = ConvertTo-Json -InputObject $Progress -Depth 20
+    $tmp = $ProgressPath + '.tmp'
+    [System.IO.File]::WriteAllText($tmp, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tmp -Destination $ProgressPath -Force
+}
+
+function Wait-ForNextUtcDay {
+    $resumeAt = [DateTime]::UtcNow.Date.AddDays(1).AddMinutes(5)
+    Write-Host ''
+    Write-Host 'The safe daily import budget has been used. Progress is saved locally.' -ForegroundColor Yellow
+    Write-Host ('Next batch will resume automatically at ' + $resumeAt.ToString('yyyy-MM-dd HH:mm') + ' UTC.') -ForegroundColor Yellow
+    Write-Host 'Keep this PowerShell process and the internet connection running. If Windows restarts, rerun the same command with -Apply; it will resume from the saved checkpoint.' -ForegroundColor Yellow
+    while ([DateTime]::UtcNow -lt $resumeAt) {
+        $remaining = $resumeAt - [DateTime]::UtcNow
+        Write-Host ('Resuming in approximately ' + [int][Math]::Ceiling($remaining.TotalHours) + ' hour(s).')
+        $sleepSeconds = [Math]::Min(300, [Math]::Max(15, [int]$remaining.TotalSeconds))
+        Start-Sleep -Seconds $sleepSeconds
+    }
 }
 
 function Invoke-PythonPreflight([string]$SqlPath, [string]$ReportPath) {
@@ -220,7 +245,7 @@ Write-Host ('Backup folder: ' + $BackupPath)
 if (-not (Test-Path -LiteralPath $BackupPath -PathType Container)) {
     throw "Backup folder not found: $BackupPath. Keep the folder name LK-Newsroom-Complete-Backup and rerun with -BackupPath if needed."
 }
-foreach ($required in @($Builder, $SchemaFile, $OperationsSchemaFile, $WranglerConfig)) {
+foreach ($required in @($Builder, $Splitter, $SchemaFile, $OperationsSchemaFile, $WranglerConfig)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required repository file is missing: $required" }
 }
 
