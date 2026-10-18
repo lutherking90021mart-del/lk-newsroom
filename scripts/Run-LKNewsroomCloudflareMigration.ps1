@@ -269,40 +269,85 @@ foreach ($required in @($Builder, $Splitter, $SchemaFile, $OperationsSchemaFile,
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required repository file is missing: $required" }
 }
 
-Write-Step '1/5 Prepare the D1 import from your saved CSV files'
-$pythonCommand = Get-Command 'py' -ErrorAction SilentlyContinue
-if ($pythonCommand) {
-    & $pythonCommand.Source -3 $Builder $BackupPath
-} else {
-    $pythonCommand = Get-Command 'python' -ErrorAction SilentlyContinue
-    if (-not $pythonCommand) { throw 'Python 3 was not found. Install Python 3 and try again.' }
-    & $pythonCommand.Source $Builder $BackupPath
-}
-if ($LASTEXITCODE -ne 0) { throw 'CSV-to-D1 conversion failed. No Cloudflare database changes were made.' }
-
 $SqlPath = Join-Path $BackupPath 'cloudflare-d1-core-import.sql'
 $ReportPath = Join-Path $BackupPath 'cloudflare-d1-import-report.txt'
-if (-not (Test-Path -LiteralPath $SqlPath -PathType Leaf)) { throw "Generated SQL was not found: $SqlPath" }
-if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { throw "Import report was not found: $ReportPath" }
+$reuseValidatedSql = $false
 
-$report = Get-Content -LiteralPath $ReportPath -Raw
-$warningMatch = [regex]::Match($report, '(?s)Warnings:\s*(.*?)(?:\r?\nIMPORTANT:|$)')
-if ($warningMatch.Success) {
-    $warningText = $warningMatch.Groups[1].Value.Trim()
-    if ($warningText -and $warningText -ne 'No row conversion warnings detected.') {
-        Write-Host $warningText -ForegroundColor Yellow
-        throw 'The converter reported row warnings. Review cloudflare-d1-import-report.txt before any remote import. Nothing in Cloudflare was changed.'
+# Reuse a saved SQL file only when its hash exactly matches the checkpoint that
+# was made after successful validation.
+if ((Test-Path -LiteralPath $ProgressPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $SqlPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $ReportPath -PathType Leaf)) {
+    try {
+        $savedProgressForReuse = Get-Content -LiteralPath $ProgressPath -Raw | ConvertFrom-Json
+        $existingSqlHash = (Get-FileHash -LiteralPath $SqlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $existingReport = Get-Content -LiteralPath $ReportPath -Raw
+        $existingWarnings = [regex]::Match($existingReport, '(?s)Warnings:\s*(.*?)(?:\r?\nIMPORTANT:|$)')
+        if ($savedProgressForReuse.SourceSqlSha256 -eq $existingSqlHash -and
+            $existingWarnings.Success -and
+            (-not $existingWarnings.Groups[1].Value.Trim() -or
+             $existingWarnings.Groups[1].Value.Trim() -eq 'No row conversion warnings detected.')) {
+            $reuseValidatedSql = $true
+            $rowsSection = [regex]::Match($existingReport, '(?s)Rows written to SQL by table:\s*(.*?)(?:\r?\nSkipped/archive-only tables:|$)')
+            if ($rowsSection.Success) {
+                $expectedCounts = @{}
+                foreach ($line in ($rowsSection.Groups[1].Value -split '\r?\n')) {
+                    $parts = $line.Split([char]9)
+                    if ($parts.Count -ge 2 -and $parts[0].Trim() -and $parts[1].Trim() -match '^\d+$') {
+                        $expectedCounts[$parts[0].Trim()] = [int64]$parts[1].Trim()
+                    }
+                }
+                $script:PreflightCounts = [pscustomobject]$expectedCounts
+            }
+        }
+    } catch {
+        $reuseValidatedSql = $false
     }
 }
 
-$sqlInfo = Get-Item -LiteralPath $SqlPath
-Write-Host ('Import file: ' + $SqlPath)
-Write-Host ('Import SQL size: ' + $sqlInfo.Length.ToString('N0') + ' bytes')
-Write-Host ('Report: ' + $ReportPath)
+if ($reuseValidatedSql) {
+    Write-Step '1/5 Reuse previously validated SQL matching the saved checkpoint'
+    Write-Host 'The SQL hash matches the saved checkpoint. Skipping CSV conversion and the full local SQLite preflight.'
+    Write-Host ('Import file: ' + $SqlPath)
+    Write-Host ('Import SQL size: ' + (Get-Item -LiteralPath $SqlPath).Length.ToString('N0') + ' bytes')
+    Write-Host ('Report: ' + $ReportPath)
+} else {
+    Write-Step '1/5 Prepare the D1 import from your saved CSV files'
+    $pythonCommand = Get-Command 'py' -ErrorAction SilentlyContinue
+    if ($pythonCommand) {
+        & $pythonCommand.Source -3 $Builder $BackupPath
+    } else {
+        $pythonCommand = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $pythonCommand) { throw 'Python 3 was not found. Install Python 3 and try again.' }
+        & $pythonCommand.Source $Builder $BackupPath
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'CSV-to-D1 conversion failed. No Cloudflare database changes were made.' }
+
+    if (-not (Test-Path -LiteralPath $SqlPath -PathType Leaf)) { throw "Generated SQL was not found: $SqlPath" }
+    if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { throw "Import report was not found: $ReportPath" }
+
+    $report = Get-Content -LiteralPath $ReportPath -Raw
+    $warningMatch = [regex]::Match($report, '(?s)Warnings:\s*(.*?)(?:\r?\nIMPORTANT:|$)')
+    if ($warningMatch.Success) {
+        $warningText = $warningMatch.Groups[1].Value.Trim()
+        if ($warningText -and $warningText -ne 'No row conversion warnings detected.') {
+            Write-Host $warningText -ForegroundColor Yellow
+            throw 'The converter reported row warnings. Review cloudflare-d1-import-report.txt before any remote import. Nothing in Cloudflare was changed.'
+        }
+    }
+
+    $sqlInfo = Get-Item -LiteralPath $SqlPath
+    Write-Host ('Import file: ' + $SqlPath)
+    Write-Host ('Import SQL size: ' + $sqlInfo.Length.ToString('N0') + ' bytes')
+    Write-Host ('Report: ' + $ReportPath)
+}
 
 Write-Step '2/5 Validate the complete import locally before uploading'
-Invoke-PythonPreflight $SqlPath $ReportPath
-
+if ($reuseValidatedSql) {
+    Write-Host 'Previous successful local validation is being reused because the SQL hash exactly matches the saved remote checkpoint.' -ForegroundColor Green
+} else {
+    Invoke-PythonPreflight $SqlPath $ReportPath
+}
 if (-not $Apply) {
     Write-Host ''
     Write-Host 'DRY RUN COMPLETE. No login, Cloudflare database creation, upload, deployment, or DNS changes were performed.' -ForegroundColor Green
