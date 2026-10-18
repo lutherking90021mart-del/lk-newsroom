@@ -15,8 +15,8 @@ $OperationsSchemaFile = Join-Path $RepoRoot 'cloudflare\schema-operations.sql'
 $Splitter = Join-Path $RepoRoot 'scripts\splitCloudflareD1Import.py'
 $WranglerConfig = Join-Path $RepoRoot 'wrangler.jsonc'
 $ProgressPath = Join-Path $BackupPath 'cloudflare-d1-migration-progress.json'
-$ImportBatchSize = 30000
-$DailyWriteBudget = 60000
+$ImportBatchSize = 5000
+$DailyRowWriteBudget = 60000
 
 function Write-Step([string]$Message) {
     Write-Host ''
@@ -350,11 +350,53 @@ if (Test-Path -LiteralPath $ProgressPath -PathType Leaf) {
     Write-Host ('Prepared ' + $manifest.batch_count + ' SQL batches, up to ' + $ImportBatchSize + ' statements each.') -ForegroundColor Green
     Write-Host ('Batch files are saved under: ' + $batchDirectory)
 }
+# If a previous runner used 30,000-statement batches, rebuild the same SQL into
+# smaller batches and resume from the exact count already checkpointed.
+if ($progress -and [int]$manifest.batch_size -ne $ImportBatchSize) {
+    $completedStatements = [int64]$progress.StatementsCompleted
+    if (($completedStatements % $ImportBatchSize) -ne 0) {
+        throw "The saved checkpoint at $completedStatements statements is not aligned with the new $ImportBatchSize-statement batch size. No remote changes were made."
+    }
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
+    $newBatchDirectory = Join-Path $BackupPath ('cloudflare-d1-batches-' + $stamp)
+    $pythonLauncher = Get-Command 'py' -ErrorAction SilentlyContinue
+    if ($pythonLauncher) {
+        $splitOutput = & $pythonLauncher.Source -3 $Splitter $SqlPath $newBatchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    } else {
+        $pythonLauncher = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) { throw 'Python 3 was not found. No Cloudflare changes were made.' }
+        $splitOutput = & $pythonLauncher.Source $Splitter $SqlPath $newBatchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    }
+    $splitExitCode = $LASTEXITCODE
+    if ($splitExitCode -ne 0) { throw ('Could not re-batch saved SQL safely.' + [Environment]::NewLine + $splitOutput) }
+    $newManifest = Get-Content -LiteralPath (Join-Path $newBatchDirectory 'manifest.json') -Raw | ConvertFrom-Json
+    if ($newManifest.source_sha256 -ne $sourceHash -or [int64]$newManifest.total_statements -ne [int64]$manifest.total_statements) {
+        throw 'Re-batched SQL manifest does not match the validated source or saved statement total.'
+    }
+    $progress.BatchDirectory = $newBatchDirectory
+    $progress.BatchSize = $ImportBatchSize
+    $progress.TotalBatches = [int]$newManifest.batch_count
+    $progress.NextBatch = [int][Math]::Floor($completedStatements / $ImportBatchSize) + 1
+    if (-not $progress.PSObject.Properties['RowsWrittenToday']) {
+        # The previous runner tracked statements rather than affected rows.
+        # Conservatively treat today's allowance as consumed because the last
+        # recorded command reported 153,676 rows written. The loop will wait
+        # for midnight UTC before sending another D1 write request.
+        $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue $DailyRowWriteBudget -Force
+    }
+    if (-not $progress.PSObject.Properties['RowsPerStatementEstimate']) {
+        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.7 -Force
+    }
+    Save-MigrationProgress $progress
+    $batchDirectory = $newBatchDirectory
+    $manifest = $newManifest
+    Write-Host ('Re-batched the remaining import into ' + $manifest.batch_count + ' smaller 5,000-statement batches, resuming at batch ' + $progress.NextBatch + '.') -ForegroundColor Green
+}
 $batchFiles = @($manifest.batches)
 if ($batchFiles.Count -ne [int]$manifest.batch_count -or $batchFiles.Count -eq 0) {
     throw 'Batch manifest is incomplete. No Cloudflare changes were made.'
 }
-Write-Host ('Conservative daily import budget: ' + $DailyWriteBudget.ToString('N0') + ' SQL write statements, leaving room under the 100,000/day Free limit.')
+Write-Host ('Conservative daily budget: ' + $DailyRowWriteBudget.ToString('N0') + ' actual rows written, below the 100,000/day Free limit.')
 
 Write-Step '4/6 Install dependencies and prepare the preview build before remote changes'
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
@@ -441,17 +483,32 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
     $utcToday = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
     if ($progress.UtcDate -ne $utcToday) {
         $progress.UtcDate = $utcToday
+        if ($progress.PSObject.Properties['RowsWrittenToday']) {
+            $progress.RowsWrittenToday = 0
+        } else {
+            $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue 0 -Force
+        }
         $progress.StatementsWrittenToday = 0
+        Save-MigrationProgress $progress
+    }
+    if (-not $progress.PSObject.Properties['RowsWrittenToday']) {
+        $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue $DailyRowWriteBudget -Force
+        Save-MigrationProgress $progress
+    }
+    if (-not $progress.PSObject.Properties['RowsPerStatementEstimate']) {
+        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.7 -Force
         Save-MigrationProgress $progress
     }
 
     $batchNumber = [int]$progress.NextBatch
     $batchInfo = $batchFiles[$batchNumber - 1]
     $batchStatements = [int]$batchInfo.statements
+    $estimatedRowsThisBatch = [int64][Math]::Ceiling($batchStatements * [double]$progress.RowsPerStatementEstimate * 1.1)
 
-    if ([int]$progress.StatementsWrittenToday + $batchStatements -gt $DailyWriteBudget) {
+    if ([int64]$progress.RowsWrittenToday + $estimatedRowsThisBatch -gt $DailyRowWriteBudget) {
         Wait-ForNextUtcDay
         $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+        $progress.RowsWrittenToday = 0
         $progress.StatementsWrittenToday = 0
         Save-MigrationProgress $progress
         continue
@@ -465,15 +522,16 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
 
     Write-Host ''
     Write-Host ("Importing batch " + $batchNumber + "/" + $progress.TotalBatches +
-        " (" + $batchStatements.ToString('N0') + " statements; " +
-        ([int]$progress.StatementsWrittenToday).ToString('N0') + "/" +
-        $DailyWriteBudget.ToString('N0') + " budgeted today)...") -ForegroundColor Cyan
+        " (" + $batchStatements.ToString('N0') + " statements; estimated " +
+        $estimatedRowsThisBatch.ToString('N0') + " rows written; " +
+        ([int64]$progress.RowsWrittenToday).ToString('N0') + "/" +
+        $DailyRowWriteBudget.ToString('N0') + " row-write budget used today)...") -ForegroundColor Cyan
 
     # Wrangler writes its normal D1-availability warning to stderr. Under
     # PowerShell with ErrorActionPreference=Stop, a native stderr line can be
     # raised as NativeCommandError before the exit code is read. Capture output
     # safely and inspect the real native exit code instead.
-    $batchOutput = Invoke-NpxCapture @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $batchPath, '--yes') -AllowNonZero
+    $batchOutput = Invoke-NpxCapture @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $batchPath, '--yes', '--json') -AllowNonZero
     $batchExitCode = $script:LastNpxExitCode
     if ($batchExitCode -ne 0) {
         Write-Host $batchOutput -ForegroundColor Yellow
@@ -490,18 +548,34 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
 
     Write-Host $batchOutput
     $completedUtcDay = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
-    $progress.StatementsCompleted = [int]$progress.StatementsCompleted + $batchStatements
-    if ($completedUtcDay -ne $batchUtcDay) {
-        # If a batch crosses midnight, count it conservatively against the new day.
-        $progress.StatementsWrittenToday = $batchStatements
-    } else {
-        $progress.StatementsWrittenToday = [int]$progress.StatementsWrittenToday + $batchStatements
+    # Parse Wrangler's actual rows_written metric. If output format changes, consume
+    # today's budget conservatively rather than issuing another potentially unsafe write.
+    $rowsWrittenMatch = [regex]::Match($batchOutput, '(?i)["'']?(?:Rows written|rows_written)["'']?\s*[:=]\s*["'']?([\d,]+)')
+    if (-not $rowsWrittenMatch.Success) {
+        $rowsWrittenMatch = [regex]::Match($batchOutput, '(?i)\b([\d,]+)\s+rows written\b')
     }
+    if ($rowsWrittenMatch.Success) {
+        $actualRowsWritten = [int64](($rowsWrittenMatch.Groups[1].Value) -replace ',', '')
+        $rowsPerStatement = [double]$actualRowsWritten / [Math]::Max(1, $batchStatements)
+        # Keep a conservative rolling estimate; never reduce it during the migration.
+        $progress.RowsPerStatementEstimate = [Math]::Max([double]$progress.RowsPerStatementEstimate, $rowsPerStatement * 1.1)
+        if ($completedUtcDay -ne $batchUtcDay) {
+            $progress.RowsWrittenToday = $actualRowsWritten
+        } else {
+            $progress.RowsWrittenToday = [int64]$progress.RowsWrittenToday + $actualRowsWritten
+        }
+    } else {
+        Write-Host 'Could not safely read rows_written from Wrangler output; pausing further writes until the next UTC day.' -ForegroundColor Yellow
+        $progress.RowsWrittenToday = $DailyRowWriteBudget
+    }
+    $progress.StatementsCompleted = [int64]$progress.StatementsCompleted + $batchStatements
+    $progress.StatementsWrittenToday = [int64]$progress.StatementsWrittenToday + $batchStatements
     $progress.NextBatch = $batchNumber + 1
     $progress.UtcDate = $completedUtcDay
     Save-MigrationProgress $progress
     Write-Host ("Checkpoint saved. Completed " + $progress.StatementsCompleted.ToString('N0') +
-        " of " + $manifest.total_statements.ToString('N0') + " import statements.") -ForegroundColor Green
+        " of " + $manifest.total_statements.ToString('N0') + " import statements; rows written today: " +
+        ([int64]$progress.RowsWrittenToday).ToString('N0') + ".") -ForegroundColor Green
 }
 
 $countResult = Invoke-D1Query "SELECT (SELECT COUNT(*) FROM articles) AS articles, (SELECT COUNT(*) FROM social_graphics) AS social_graphics, (SELECT COUNT(*) FROM article_tags) AS article_tags, (SELECT COUNT(*) FROM social_posts) AS social_posts;"
