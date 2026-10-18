@@ -376,20 +376,108 @@ Write-Host ('D1 database found: ' + $DatabaseName + ' (' + $databaseId + ')') -F
 $tableResult = Invoke-D1Query "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%';"
 $tableCount = [int]$tableResult.table_count
 
-Write-Step '6/6 Import or resume the D1 migration, then deploy the preview'
-if ($tableCount -eq 0) {
-    Write-Host 'D1 is empty. Initializing schema and importing the verified CSV export.'
-    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
-    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $OperationsSchemaFile, '--yes')
-    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SqlPath, '--yes')
+if ($progress) {
+    if ($progress.DatabaseId -ne $databaseId) {
+        throw 'The saved migration checkpoint belongs to a different D1 database. No data was modified.'
+    }
+    if ([int]$progress.TotalBatches -ne [int]$manifest.batch_count) {
+        throw 'The saved checkpoint batch count differs from the current SQL manifest. No data was modified.'
+    }
 } else {
-    Write-Host "D1 already has $tableCount tables. Checking whether this is a completed prior import; no existing tables will be dropped."
+    if ($tableCount -gt 0) {
+        throw "D1 already contains $tableCount tables, but there is no migration checkpoint. To protect existing data, the runner will not overwrite or resume it automatically."
+    }
+    $progress = [pscustomobject]@{
+        DatabaseId = $databaseId
+        BatchDirectory = $batchDirectory
+        SourceSqlSha256 = $sourceHash
+        BatchSize = $ImportBatchSize
+        TotalBatches = [int]$manifest.batch_count
+        NextBatch = 1
+        StatementsCompleted = 0
+        UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+        StatementsWrittenToday = 0
+        MainSchemaReady = $false
+        OperationsSchemaReady = $false
+        ImportComplete = $false
+    }
+    Save-MigrationProgress $progress
+}
+
+Write-Step '6/6 Initialize D1, import in quota-safe batches, verify, and deploy preview'
+if (-not $progress.MainSchemaReady) {
+    Write-Host 'Applying the base D1 schema...'
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
+    $progress.MainSchemaReady = $true
+    Save-MigrationProgress $progress
+}
+if (-not $progress.OperationsSchemaReady) {
+    Write-Host 'Applying the newsroom operations schema...'
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $OperationsSchemaFile, '--yes')
+    $progress.OperationsSchemaReady = $true
+    Save-MigrationProgress $progress
+}
+
+while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
+    $utcToday = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    if ($progress.UtcDate -ne $utcToday) {
+        $progress.UtcDate = $utcToday
+        $progress.StatementsWrittenToday = 0
+        Save-MigrationProgress $progress
+    }
+
+    $batchNumber = [int]$progress.NextBatch
+    $batchInfo = $batchFiles[$batchNumber - 1]
+    $batchStatements = [int]$batchInfo.statements
+
+    if ([int]$progress.StatementsWrittenToday + $batchStatements -gt $DailyWriteBudget) {
+        Wait-ForNextUtcDay
+        $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+        $progress.StatementsWrittenToday = 0
+        Save-MigrationProgress $progress
+        continue
+    }
+
+    $batchPath = Join-Path $batchDirectory ([string]$batchInfo.file)
+    if (-not (Test-Path -LiteralPath $batchPath -PathType Leaf)) {
+        throw "Batch $batchNumber is missing: $batchPath. The saved checkpoint remains unchanged."
+    }
+
+    Write-Host ''
+    Write-Host ("Importing batch " + $batchNumber + "/" + $progress.TotalBatches +
+        " (" + $batchStatements.ToString('N0') + " statements; " +
+        [int]$progress.StatementsWrittenToday.ToString('N0') + "/" +
+        $DailyWriteBudget.ToString('N0') + " budgeted today)...") -ForegroundColor Cyan
+
+    $batchOutput = & $script:NpxPath wrangler d1 execute $DatabaseName --remote --file $batchPath --yes 2>&1 | Out-String
+    $batchExitCode = $LASTEXITCODE
+    if ($batchExitCode -ne 0) {
+        Write-Host $batchOutput -ForegroundColor Yellow
+        if ($batchOutput -match '(?i)(daily.*row.write.limit|row.write.limit|exceeded.*free.tier.*row.write|free.tier.daily.row.write)') {
+            Write-Host 'Cloudflare reached the daily free-tier write limit earlier than expected. The current batch remains checkpointed for a safe retry.' -ForegroundColor Yellow
+            Wait-ForNextUtcDay
+            $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+            $progress.StatementsWrittenToday = 0
+            Save-MigrationProgress $progress
+            continue
+        }
+        throw "D1 batch $batchNumber failed. The checkpoint was not advanced. Fix the reported issue, then rerun this script with -Apply to retry the current batch."
+    }
+
+    Write-Host $batchOutput
+    $progress.StatementsCompleted = [int]$progress.StatementsCompleted + $batchStatements
+    $progress.StatementsWrittenToday = [int]$progress.StatementsWrittenToday + $batchStatements
+    $progress.NextBatch = $batchNumber + 1
+    $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    Save-MigrationProgress $progress
+    Write-Host ("Checkpoint saved. Completed " + $progress.StatementsCompleted.ToString('N0') +
+        " of " + $manifest.total_statements.ToString('N0') + " import statements.") -ForegroundColor Green
 }
 
 $countResult = Invoke-D1Query "SELECT (SELECT COUNT(*) FROM articles) AS articles, (SELECT COUNT(*) FROM social_graphics) AS social_graphics, (SELECT COUNT(*) FROM article_tags) AS article_tags, (SELECT COUNT(*) FROM social_posts) AS social_posts;"
 Write-Host ('Verified D1 counts: ' + ($countResult | ConvertTo-Json -Compress)) -ForegroundColor Green
 if ([int]$countResult.articles -ne 21191) {
-    throw 'Remote D1 does not contain exactly 21,191 articles. The runner will not deploy or overwrite this database. Keep all backups and contact me with the error.'
+    throw 'Remote D1 does not contain exactly 21,191 articles. Deployment stopped. Keep the checkpoint and all backups; do not run a second import.'
 }
 foreach ($tableName in @('social_graphics', 'article_tags', 'social_posts')) {
     $expected = $script:PreflightCounts.$tableName
@@ -397,6 +485,8 @@ foreach ($tableName in @('social_graphics', 'article_tags', 'social_posts')) {
         throw "Remote D1 $tableName count differs from the locally validated import. Deployment stopped; no data was deleted."
     }
 }
+$progress.ImportComplete = $true
+Save-MigrationProgress $progress
 
 Invoke-NpxLive @('wrangler', 'deploy')
 
