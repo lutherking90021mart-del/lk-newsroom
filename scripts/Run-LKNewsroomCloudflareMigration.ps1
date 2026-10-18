@@ -385,7 +385,7 @@ if ($progress -and [int]$manifest.batch_size -ne $ImportBatchSize) {
         $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue $DailyRowWriteBudget -Force
     }
     if (-not $progress.PSObject.Properties['RowsPerStatementEstimate']) {
-        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.7 -Force
+        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.3 -Force
     }
     Save-MigrationProgress $progress
     $batchDirectory = $newBatchDirectory
@@ -496,7 +496,7 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
         Save-MigrationProgress $progress
     }
     if (-not $progress.PSObject.Properties['RowsPerStatementEstimate']) {
-        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.7 -Force
+        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.3 -Force
         Save-MigrationProgress $progress
     }
 
@@ -558,7 +558,7 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
         $actualRowsWritten = [int64](($rowsWrittenMatch.Groups[1].Value) -replace ',', '')
         $rowsPerStatement = [double]$actualRowsWritten / [Math]::Max(1, $batchStatements)
         # Keep a conservative rolling estimate; never reduce it during the migration.
-        $progress.RowsPerStatementEstimate = [Math]::Max([double]$progress.RowsPerStatementEstimate, $rowsPerStatement * 1.1)
+        $progress.RowsPerStatementEstimate = [Math]::Max([double]$progress.RowsPerStatementEstimate, $rowsPerStatement)
         if ($completedUtcDay -ne $batchUtcDay) {
             $progress.RowsWrittenToday = $actualRowsWritten
         } else {
