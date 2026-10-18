@@ -42,6 +42,7 @@ function Invoke-NpxCapture([string[]]$NpxArguments, [switch]$AllowNonZero) {
         $ErrorActionPreference = 'Continue'
         $output = & $script:NpxPath @NpxArguments 2>&1 | Out-String
         $code = $LASTEXITCODE
+        $script:LastNpxExitCode = $code
     }
     finally {
         $ErrorActionPreference = $previousPreference
@@ -58,6 +59,7 @@ function Invoke-NpxLive([string[]]$NpxArguments) {
         $ErrorActionPreference = 'Continue'
         & $script:NpxPath @NpxArguments
         $code = $LASTEXITCODE
+        $script:LastNpxExitCode = $code
     }
     finally {
         $ErrorActionPreference = $previousPreference
@@ -369,7 +371,7 @@ if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. No Cloudfla
 
 Write-Step '5/6 Sign in to Cloudflare and prepare D1'
 $whoOutput = Invoke-NpxCapture @('wrangler', 'whoami') -AllowNonZero
-if ($LASTEXITCODE -ne 0 -or $whoOutput -match '(?i)(not authenticated|not logged in|please run.*login|login required)') {
+if ($script:LastNpxExitCode -ne 0 -or $whoOutput -match '(?i)(not authenticated|not logged in|please run.*login|login required)') {
     Write-Host 'Complete the Cloudflare sign-in that opens in your browser.' -ForegroundColor Yellow
     Invoke-NpxLive @('wrangler', 'login')
     $whoOutput = Invoke-NpxCapture @('wrangler', 'whoami')
