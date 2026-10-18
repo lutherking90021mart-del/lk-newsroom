@@ -49,6 +49,35 @@ jobs:
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck cloudflare/worker.ts scripts/migrateStorageCsvToR2.ts scripts/archiveDatabaseCsvToR2.ts services/objectStorage.ts
       - name: Validate Python import converter and SQL splitter syntax
         run: python -m py_compile scripts/buildCloudflareImport.py scripts/splitCloudflareD1Import.py
+      - name: Test SQL splitting preserves multiline text and removes connection PRAGMA
+        run: |
+          python - <<'PY'
+          import sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, "scripts")
+          from splitCloudflareD1Import import split_sql
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              source = root / "sample.sql"
+              output = root / "batches"
+              source.write_text(
+                  "-- fixture\n"
+                  "PRAGMA foreign_keys=OFF;\n"
+                  "INSERT INTO articles(id, content) VALUES ('a', 'line one;\nline two');\n"
+                  "UPDATE articles SET content='literal ; semicolon' WHERE id='a';\n"
+                  "INSERT OR IGNORE INTO article_tags(article_id, tag_id) VALUES ('a', 'tag');\n",
+                  encoding="utf-8"
+              )
+              manifest = split_sql(source, output, 2)
+              combined = "\n".join(p.read_text(encoding="utf-8") for p in sorted(output.glob("batch-*.sql")))
+              assert manifest["total_statements"] == 3, manifest
+              assert manifest["batch_count"] == 2, manifest
+              assert "line one;\nline two" in combined, combined
+              assert "literal ; semicolon" in combined, combined
+              assert "PRAGMA foreign_keys" not in combined, combined
+              print("SQL splitter fixture passed.")
+          PY
       - name: Validate D1 schema with SQLite
         run: |
           python - <<'PY'
