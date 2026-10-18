@@ -135,16 +135,26 @@ try:
     bytes_read = 0
     conn.execute("BEGIN")
     try:
+        pending = []
         with import_path.open("r", encoding="utf-8-sig", newline="") as sql_file:
             for line in sql_file:
-                sql = line.strip()
-                if not sql or sql.startswith("--"):
+                if not pending and (not line.strip() or line.lstrip().startswith("--")):
                     continue
-                conn.execute(sql)
-                statements += 1
+                pending.append(line)
                 bytes_read += len(line.encode("utf-8"))
-                if statements % 10000 == 0:
-                    print(f"Validated {statements:,} SQL statements ({bytes_read / (1024 * 1024):.1f} MiB read)...", flush=True)
+                statement = "".join(pending)
+                if sqlite3.complete_statement(statement):
+                    sql = statement.strip()
+                    if sql and not sql.startswith("--"):
+                        conn.execute(sql)
+                        statements += 1
+                        if statements % 10000 == 0:
+                            print(f"Validated {statements:,} SQL statements ({bytes_read / (1024 * 1024):.1f} MiB read)...", flush=True)
+                    pending.clear()
+        if pending:
+            tail = "".join(pending).strip()
+            if tail and not tail.startswith("--"):
+                raise RuntimeError("The import SQL ended with an incomplete SQL statement.")
         conn.commit()
     except Exception:
         conn.rollback()
