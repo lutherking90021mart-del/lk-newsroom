@@ -296,7 +296,47 @@ Write-Host 'It does not switch the production domain or delete Supabase/local ba
 $confirmation = Read-Host 'Type MIGRATE to continue'
 if ($confirmation -cne 'MIGRATE') { throw 'Cancelled by user. No remote changes were made.' }
 
-Write-Step '3/5 Install dependencies and prepare the preview build before remote changes'
+Write-Step '3/6 Prepare resumable SQL batches before touching Cloudflare'
+$sourceHash = (Get-FileHash -LiteralPath $SqlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$progress = $null
+$batchDirectory = $null
+if (Test-Path -LiteralPath $ProgressPath -PathType Leaf) {
+    $progress = Get-Content -LiteralPath $ProgressPath -Raw | ConvertFrom-Json
+    if ($progress.SourceSqlSha256 -ne $sourceHash) {
+        throw 'The generated SQL changed after a migration checkpoint was saved. To protect the existing D1 data, the runner stopped. Do not delete the checkpoint or rerun with a different import file.'
+    }
+    $batchDirectory = [string]$progress.BatchDirectory
+    if (-not (Test-Path -LiteralPath (Join-Path $batchDirectory 'manifest.json') -PathType Leaf)) {
+        throw "The saved batch manifest is missing from $batchDirectory. No remote changes were made."
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $batchDirectory 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.source_sha256 -ne $sourceHash) { throw 'The batch manifest does not match the currently validated import SQL.' }
+    Write-Host ('Resuming saved D1 migration at batch ' + $progress.NextBatch + ' of ' + $progress.TotalBatches + '.') -ForegroundColor Green
+} else {
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
+    $batchDirectory = Join-Path $BackupPath ('cloudflare-d1-batches-' + $stamp)
+    $pythonLauncher = Get-Command 'py' -ErrorAction SilentlyContinue
+    if ($pythonLauncher) {
+        $splitOutput = & $pythonLauncher.Source -3 $Splitter $SqlPath $batchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    } else {
+        $pythonLauncher = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) { throw 'Python 3 was not found. No Cloudflare changes were made.' }
+        $splitOutput = & $pythonLauncher.Source $Splitter $SqlPath $batchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    }
+    $splitExitCode = $LASTEXITCODE
+    if ($splitExitCode -ne 0) { throw ('Could not split SQL safely. No Cloudflare changes were made.' + [Environment]::NewLine + $splitOutput) }
+    $manifest = Get-Content -LiteralPath (Join-Path $batchDirectory 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.source_sha256 -ne $sourceHash) { throw 'Generated batch manifest does not match the validated SQL file.' }
+    Write-Host ('Prepared ' + $manifest.batch_count + ' SQL batches, up to ' + $ImportBatchSize + ' statements each.') -ForegroundColor Green
+    Write-Host ('Batch files are saved under: ' + $batchDirectory)
+}
+$batchFiles = @($manifest.batches)
+if ($batchFiles.Count -ne [int]$manifest.batch_count -or $batchFiles.Count -eq 0) {
+    throw 'Batch manifest is incomplete. No Cloudflare changes were made.'
+}
+Write-Host ('Conservative daily import budget: ' + $DailyWriteBudget.ToString('N0') + ' SQL write statements, leaving room under the 100,000/day Free limit.')
+
+Write-Step '4/6 Install dependencies and prepare the preview build before remote changes'
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
     $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
     if (-not $npmCommand) { $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue }
@@ -309,7 +349,7 @@ if (-not $nodeCommand) { throw 'Node.js was not found. No Cloudflare changes wer
 & $nodeCommand.Source 'scripts/buildCloudflareAssets.mjs'
 if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. No Cloudflare changes were made.' }
 
-Write-Step '4/5 Sign in to Cloudflare and prepare D1'
+Write-Step '5/6 Sign in to Cloudflare and prepare D1'
 $whoOutput = & $script:NpxPath wrangler whoami 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
     Write-Host 'Complete the Cloudflare sign-in that opens in your browser.' -ForegroundColor Yellow
@@ -336,7 +376,7 @@ Write-Host ('D1 database found: ' + $DatabaseName + ' (' + $databaseId + ')') -F
 $tableResult = Invoke-D1Query "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%';"
 $tableCount = [int]$tableResult.table_count
 
-Write-Step '5/5 Import or resume the D1 migration, then deploy the preview'
+Write-Step '6/6 Import or resume the D1 migration, then deploy the preview'
 if ($tableCount -eq 0) {
     Write-Host 'D1 is empty. Initializing schema and importing the verified CSV export.'
     Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
