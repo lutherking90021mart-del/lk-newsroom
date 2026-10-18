@@ -1,5 +1,5 @@
 -- Preserve the legacy CMS markdown field for imported articles.
-ALTER TABLE articles ADD COLUMN content_markdown TEXT;
+-- Articles and advertisements use their complete final columns in schema.sql.
 
 -- Additional application tables for the LK Newsroom Cloudflare migration.
 -- Run after schema.sql. Historical high-volume event/log tables are intentionally
@@ -442,18 +442,28 @@ CREATE TABLE IF NOT EXISTS article_likes (
   created_at TEXT,
   PRIMARY KEY(user_id, article_id)
 );
+-- Articles and advertisements use their complete final columns in schema.sql.
 
-ALTER TABLE advertisements ADD COLUMN title TEXT;
-ALTER TABLE advertisements ADD COLUMN description TEXT;
-ALTER TABLE advertisements ADD COLUMN ad_type TEXT NOT NULL DEFAULT 'direct';
-ALTER TABLE advertisements ADD COLUMN adsense_slot TEXT;
-ALTER TABLE advertisements ADD COLUMN popup_delay_seconds INTEGER NOT NULL DEFAULT 8;
-ALTER TABLE advertisements ADD COLUMN display_frequency TEXT NOT NULL DEFAULT 'session';
-ALTER TABLE advertisements ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
-ALTER TABLE advertisements ADD COLUMN price REAL;
-ALTER TABLE advertisements ADD COLUMN currency TEXT DEFAULT 'GHS';
-ALTER TABLE advertisements ADD COLUMN campaign_goal TEXT;
-ALTER TABLE advertisements ADD COLUMN mobile_sticky INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE advertisements ADD COLUMN advertiser_id TEXT;
-ALTER TABLE advertisements ADD COLUMN advertiser_request_id TEXT;
+-- Articles and advertisements use their complete final columns in schema.sql.
 
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
+
+-- Articles and advertisements use their complete final columns in schema.sql.
