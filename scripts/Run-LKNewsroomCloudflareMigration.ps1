@@ -49,7 +49,7 @@ function ConvertFrom-ToolJson([string]$Output) {
     $arrayStart = $Output.IndexOf('[')
     $objectStart = $Output.IndexOf('{')
     $starts = @($arrayStart, $objectStart) | Where-Object { $_ -ge 0 } | Sort-Object
-    if (-not $starts) { throw ('Could not find JSON in tool output: ' + $Output) }
+    if ($starts.Count -eq 0) { throw ('Could not find JSON in tool output: ' + $Output) }
     $start = [int]$starts[0]
     $open = $Output[$start]
     $end = if ($open -eq '[') { $Output.LastIndexOf(']') } else { $Output.LastIndexOf('}') }
