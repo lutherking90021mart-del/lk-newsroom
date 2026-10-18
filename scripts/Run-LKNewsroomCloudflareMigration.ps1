@@ -33,19 +33,37 @@ function Get-NpxPath {
 
 $script:NpxPath = Get-NpxPath
 
-function Invoke-NpxCapture([string[]]$NpxArguments) {
-    $output = & $script:NpxPath @NpxArguments 2>&1 | Out-String
-    $code = $LASTEXITCODE
-    if ($code -ne 0) {
+function Invoke-NpxCapture([string[]]$NpxArguments, [switch]$AllowNonZero) {
+    # Native npm/npx commands can emit harmless cleanup warnings on stderr.
+    # With ErrorActionPreference=Stop, PowerShell may otherwise terminate before
+    # the native exit code can be examined.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $script:NpxPath @NpxArguments 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($code -ne 0 -and -not $AllowNonZero) {
         throw ("Command failed (exit " + $code + "): npx " + ($NpxArguments -join ' ') + [Environment]::NewLine + $output)
     }
     return $output
 }
 
 function Invoke-NpxLive([string[]]$NpxArguments) {
-    & $script:NpxPath @NpxArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw ("Command failed (exit " + $LASTEXITCODE + "): npx " + ($NpxArguments -join ' '))
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $script:NpxPath @NpxArguments
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($code -ne 0) {
+        throw ("Command failed (exit " + $code + "): npx " + ($NpxArguments -join ' '))
     }
 }
 
@@ -350,14 +368,13 @@ if (-not $nodeCommand) { throw 'Node.js was not found. No Cloudflare changes wer
 if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. No Cloudflare changes were made.' }
 
 Write-Step '5/6 Sign in to Cloudflare and prepare D1'
-$whoOutput = & $script:NpxPath wrangler whoami 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
+$whoOutput = Invoke-NpxCapture @('wrangler', 'whoami') -AllowNonZero
+if ($LASTEXITCODE -ne 0 -or $whoOutput -match '(?i)(not authenticated|not logged in|please run.*login|login required)') {
     Write-Host 'Complete the Cloudflare sign-in that opens in your browser.' -ForegroundColor Yellow
     Invoke-NpxLive @('wrangler', 'login')
-    Invoke-NpxCapture @('wrangler', 'whoami') | Out-Null
-} else {
-    Write-Host $whoOutput.Trim()
+    $whoOutput = Invoke-NpxCapture @('wrangler', 'whoami')
 }
+Write-Host $whoOutput.Trim()
 
 $dbs = Get-D1List
 $db = @($dbs | Where-Object { $_.name -eq $DatabaseName -or $_.database_name -eq $DatabaseName } | Select-Object -First 1)
