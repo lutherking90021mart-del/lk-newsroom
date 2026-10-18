@@ -373,10 +373,19 @@ def insert_statement(table, row, source_map=None):
                 pending += char
             if pending:
                 chunks.append(pending)
-            statements.extend(
-                ["UPDATE articles SET " + column + "=" + column + " || " + sql_literal(chunk) + " WHERE id=" + sql_literal(values.get("id")) + ";"
-                 for chunk in chunks]
-            )
+
+            # Make content-chunk updates safe to retry if a remote D1 batch is
+            # interrupted by a free-tier daily-write limit or a transient error.
+            # A chunk only appends when the stored text has exactly the expected
+            # prefix length, so replaying a committed chunk cannot duplicate it.
+            prefix_length = 0
+            for chunk in chunks:
+                statements.append(
+                    "UPDATE articles SET " + column + "=" + column + " || " +
+                    sql_literal(chunk) + " WHERE id=" + sql_literal(values.get("id")) +
+                    " AND length(" + column + ")=" + str(prefix_length) + ";"
+                )
+                prefix_length += len(chunk)
         return statements
     raise ValueError("Row in table " + table + " exceeds Cloudflare D1's SQL statement limit; no data was truncated.")
 
