@@ -1,5 +1,4 @@
-PRAGMA foreign_keys = OFF;
-
+-- D1 enforces foreign keys; import data in dependency order.
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
