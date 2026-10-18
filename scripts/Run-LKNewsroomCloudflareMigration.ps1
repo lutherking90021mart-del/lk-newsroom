@@ -469,8 +469,12 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
         ([int]$progress.StatementsWrittenToday).ToString('N0') + "/" +
         $DailyWriteBudget.ToString('N0') + " budgeted today)...") -ForegroundColor Cyan
 
-    $batchOutput = & $script:NpxPath wrangler d1 execute $DatabaseName --remote --file $batchPath --yes 2>&1 | Out-String
-    $batchExitCode = $LASTEXITCODE
+    # Wrangler writes its normal D1-availability warning to stderr. Under
+    # PowerShell with ErrorActionPreference=Stop, a native stderr line can be
+    # raised as NativeCommandError before the exit code is read. Capture output
+    # safely and inspect the real native exit code instead.
+    $batchOutput = Invoke-NpxCapture @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $batchPath, '--yes') -AllowNonZero
+    $batchExitCode = $script:LastNpxExitCode
     if ($batchExitCode -ne 0) {
         Write-Host $batchOutput -ForegroundColor Yellow
         if ($batchOutput -match '(?i)(daily.*row.write.limit|row.write.limit|exceeded.*free.tier.*row.write|free.tier.daily.row.write)') {
