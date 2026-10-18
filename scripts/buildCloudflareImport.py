@@ -471,6 +471,7 @@ def main():
     report_path = root / "cloudflare-d1-import-report.txt"
     written = defaultdict(int)
     warnings = []
+    deferred_article_refs = []
 
     with out_path.open("w", encoding="utf-8", newline="\n") as out:
         out.write("-- Generated locally by scripts/buildCloudflareImport.py. Do not commit this data file.\n")
@@ -528,8 +529,14 @@ def main():
                     row.pop("refresh_token_encrypted", None)
                     row.pop("credential_key", None)
                     row.pop("token_expires_at", None)
-                if table == "articles" and row.get("source_id"):
-                    row["source_id"] = source_map.get(row["source_id"], row["source_id"])
+                if table == "articles":
+                    if row.get("source_id"):
+                        row["source_id"] = source_map.get(row["source_id"], row["source_id"])
+                    # Articles can reference later articles through duplicate_of.
+                    # Defer these circular self-references until every article exists.
+                    if row.get("duplicate_of"):
+                        deferred_article_refs.append((row.get("id"), row.get("duplicate_of")))
+                        row["duplicate_of"] = None
                 try:
                     stmts = insert_statement(table, row, source_map)
                     for stmt in stmts:
@@ -537,6 +544,11 @@ def main():
                     written[table] += 1
                 except Exception as exc:
                     warnings.append(table + " row " + str(row.get("id") or row.get("article_id") or "") + ": " + str(exc))
+        # Restore circular article references only after all possible target rows
+        # have been inserted, so D1's enforced foreign keys remain valid.
+        for article_id, duplicate_id in deferred_article_refs:
+            out.write("UPDATE articles SET duplicate_of=" + sql_literal(duplicate_id) +
+                      " WHERE id=" + sql_literal(article_id) + ";\n")
         out.write("-- High-volume tables excluded from D1 to preserve the Free-plan storage budget:\n")
         out.write("-- feed_logs, social_logs, analytics_events, page_views, storage.objects and Storage binaries.\n")
         out.write("-- Archive those CSV files in R2 after media migration; don't delete the local backups.\n")
