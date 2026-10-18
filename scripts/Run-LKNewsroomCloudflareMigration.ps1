@@ -106,18 +106,55 @@ function Invoke-PythonPreflight([string]$SqlPath, [string]$ReportPath) {
 
     $helperPath = Join-Path $env:TEMP ('lk-newsroom-d1-preflight-' + [guid]::NewGuid().ToString('N') + '.py')
     $helper = @'
-import json, shutil, sqlite3, sys, tempfile
+import json, re, shutil, sqlite3, sys, tempfile
 from pathlib import Path
 
 schema_path, operations_path, import_path = map(Path, sys.argv[1:4])
 work = Path(tempfile.mkdtemp(prefix="lk-newsroom-d1-preflight-"))
 db_path = work / "preflight.sqlite"
+index_pattern = re.compile(r"(?im)^[ \t]*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+[^;]+;")
 try:
+    print("Starting fast local SQLite preflight; no Cloudflare writes are involved.", flush=True)
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-32768")
+    conn.execute("PRAGMA mmap_size=268435456")
     conn.execute("PRAGMA foreign_keys=OFF")
-    conn.executescript(schema_path.read_text(encoding="utf-8-sig"))
-    conn.executescript(operations_path.read_text(encoding="utf-8-sig"))
-    conn.executescript(import_path.read_text(encoding="utf-8-sig"))
+
+    indexes = []
+    for schema_file in (schema_path, operations_path):
+        sql = schema_file.read_text(encoding="utf-8-sig")
+        indexes.extend(index_pattern.findall(sql))
+        sql = index_pattern.sub("", sql)
+        conn.executescript(sql)
+    print("Schemas loaded. Importing SQL in batches with progress messages...", flush=True)
+
+    statements = 0
+    bytes_read = 0
+    conn.execute("BEGIN")
+    try:
+        with import_path.open("r", encoding="utf-8-sig", newline="") as sql_file:
+            for line in sql_file:
+                sql = line.strip()
+                if not sql or sql.startswith("--"):
+                    continue
+                conn.execute(sql)
+                statements += 1
+                bytes_read += len(line.encode("utf-8"))
+                if statements % 10000 == 0:
+                    print(f"Validated {statements:,} SQL statements ({bytes_read / (1024 * 1024):.1f} MiB read)...", flush=True)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    print(f"Imported {statements:,} SQL statements. Rebuilding {len(indexes)} indexes...", flush=True)
+    for number, statement in enumerate(indexes, start=1):
+        conn.execute(statement)
+        print(f"Index {number}/{len(indexes)} ready.", flush=True)
+
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     counts = {}
     for table in ("articles", "article_tags", "social_graphics", "social_posts", "live_updates", "tags"):
@@ -127,8 +164,8 @@ try:
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     size_bytes = int(page_count * page_size)
     conn.close()
-    payload = {"counts": counts, "estimated_sqlite_bytes": size_bytes, "estimated_sqlite_mib": round(size_bytes / (1024 * 1024), 2)}
-    print(json.dumps(payload))
+    payload = {"counts": counts, "estimated_sqlite_bytes": size_bytes, "estimated_sqlite_mib": round(size_bytes / (1024 * 1024), 2), "validated_sql_statements": statements}
+    print(json.dumps(payload), flush=True)
     if counts.get("articles") != 21191:
         print("STOP: expected exactly 21,191 imported articles.", file=sys.stderr)
         sys.exit(3)
@@ -139,12 +176,17 @@ except Exception as exc:
     print("Local SQLite preflight failed: " + str(exc), file=sys.stderr)
     sys.exit(2)
 finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
     shutil.rmtree(work, ignore_errors=True)
 '@
     [System.IO.File]::WriteAllText($helperPath, $helper, [System.Text.UTF8Encoding]::new($false))
     try {
-        $raw = & $python.Source @pythonMode $helperPath $SchemaFile $OperationsSchemaFile $SqlPath 2>&1 | Out-String
+        $null = & $python.Source @pythonMode $helperPath $SchemaFile $OperationsSchemaFile $SqlPath 2>&1 | Tee-Object -Variable rawLines
         $code = $LASTEXITCODE
+        $raw = @($rawLines) -join [Environment]::NewLine
         if ($code -ne 0) { throw ('Local import preflight failed. No remote database changes were made.' + [Environment]::NewLine + $raw) }
         $parsed = ConvertFrom-ToolJson $raw
         $script:PreflightCounts = $parsed.counts
