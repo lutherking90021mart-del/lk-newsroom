@@ -11,6 +11,7 @@ on:
     paths:
       - "cloudflare/**"
       - "scripts/buildCloudflareImport.py"
+      - "scripts/splitCloudflareD1Import.py"
       - "scripts/Run-LKNewsroomCloudflareMigration.ps1"
       - "scripts/migrateStorageCsvToR2.ts"
       - "scripts/archiveDatabaseCsvToR2.ts"
@@ -46,8 +47,8 @@ jobs:
         run: npm run typecheck
       - name: Type-check the Cloudflare Worker and migration scripts
         run: npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck cloudflare/worker.ts scripts/migrateStorageCsvToR2.ts scripts/archiveDatabaseCsvToR2.ts services/objectStorage.ts
-      - name: Validate Python import converter syntax
-        run: python -m py_compile scripts/buildCloudflareImport.py
+      - name: Validate Python import converter and SQL splitter syntax
+        run: python -m py_compile scripts/buildCloudflareImport.py scripts/splitCloudflareD1Import.py
       - name: Validate D1 schema with SQLite
         run: |
           python - <<'PY'
