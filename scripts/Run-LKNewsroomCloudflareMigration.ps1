@@ -438,6 +438,7 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
         continue
     }
 
+    $batchUtcDay = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
     $batchPath = Join-Path $batchDirectory ([string]$batchInfo.file)
     if (-not (Test-Path -LiteralPath $batchPath -PathType Leaf)) {
         throw "Batch $batchNumber is missing: $batchPath. The saved checkpoint remains unchanged."
@@ -446,7 +447,7 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
     Write-Host ''
     Write-Host ("Importing batch " + $batchNumber + "/" + $progress.TotalBatches +
         " (" + $batchStatements.ToString('N0') + " statements; " +
-        [int]$progress.StatementsWrittenToday.ToString('N0') + "/" +
+        ([int]$progress.StatementsWrittenToday).ToString('N0') + "/" +
         $DailyWriteBudget.ToString('N0') + " budgeted today)...") -ForegroundColor Cyan
 
     $batchOutput = & $script:NpxPath wrangler d1 execute $DatabaseName --remote --file $batchPath --yes 2>&1 | Out-String
@@ -465,10 +466,16 @@ while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
     }
 
     Write-Host $batchOutput
+    $completedUtcDay = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
     $progress.StatementsCompleted = [int]$progress.StatementsCompleted + $batchStatements
-    $progress.StatementsWrittenToday = [int]$progress.StatementsWrittenToday + $batchStatements
+    if ($completedUtcDay -ne $batchUtcDay) {
+        # If a batch crosses midnight, count it conservatively against the new day.
+        $progress.StatementsWrittenToday = $batchStatements
+    } else {
+        $progress.StatementsWrittenToday = [int]$progress.StatementsWrittenToday + $batchStatements
+    }
     $progress.NextBatch = $batchNumber + 1
-    $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    $progress.UtcDate = $completedUtcDay
     Save-MigrationProgress $progress
     Write-Host ("Checkpoint saved. Completed " + $progress.StatementsCompleted.ToString('N0') +
         " of " + $manifest.total_statements.ToString('N0') + " import statements.") -ForegroundColor Green
