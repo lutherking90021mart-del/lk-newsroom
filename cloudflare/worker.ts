@@ -1382,8 +1382,17 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/health" || path === "/v1/health") {
     try {
       await env.DB.prepare("SELECT 1 AS ok").first();
-      const last = await env.DB.prepare("SELECT status,started_at,completed_at FROM worker_runs ORDER BY started_at DESC LIMIT 1").first();
-      return json({ status: "ok", service: "lk-newsroom-cloudflare", updatedAt: new Date().toISOString(), worker: last || null }, 200, origin);
+      const [last, sourceCount] = await Promise.all([
+        env.DB.prepare("SELECT status,started_at,completed_at,fetched,added,updated,skipped,errors,error FROM worker_runs ORDER BY started_at DESC LIMIT 1").first(),
+        env.DB.prepare("SELECT COUNT(*) AS enabled FROM news_sources WHERE enabled=1").first()
+      ]);
+      return json({
+        status: "ok",
+        service: "lk-newsroom-cloudflare",
+        updatedAt: new Date().toISOString(),
+        enabledSources: Number(sourceCount?.enabled || 0),
+        worker: last || null
+      }, 200, origin);
     } catch (e) {
       return json({ status: "error", error: String(e) }, 503, origin);
     }
