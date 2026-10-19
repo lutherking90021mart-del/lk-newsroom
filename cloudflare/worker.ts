@@ -68,19 +68,91 @@ function pickLink(value: unknown): string {
   }
   return "";
 }
-function imageOf(item: Record<string, any>): string | null {
-  const candidates = [item.thumbnail, item.image, item.enclosure, item.content, item.group, item.description, item.summary];
-  for (const candidate of candidates) {
-    for (const value of asList(candidate)) {
-      if (typeof value === "string") {
-        const found = value.match(/<img\b[^>]*\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
-        if (found && /^https?:\/\//i.test(found[1])) return found[1];
-      } else if (value && typeof value === "object") {
-        const v = value as Record<string, unknown>;
-        const url = text(v["@_url"] || v["@_href"] || v["@_src"] || v.url || v.href).trim();
-        if (/^https?:\/\//i.test(url)) return url;
+function imageOf(item: Record<string, any>, baseUrl?: string): string | null {
+  const imageKeys = [
+    "thumbnail", "image", "enclosure", "content", "group", "description", "summary",
+    "image_url", "imageUrl", "urlToImage", "image_href", "srcset", "poster",
+    "content:encoded", "media:thumbnail", "media:content", "itunes:image"
+  ];
+  const urlKeys = ["@_url", "@_href", "@_src", "url", "href", "src", "image_url", "imageUrl", "urlToImage", "poster"];
+
+  const normalize = (rawValue: unknown): string | null => {
+    let raw = text(rawValue).trim();
+    if (!raw) return null;
+    raw = raw.replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/g, "'");
+    // Some feeds provide srcset rather than src; use the first candidate.
+    raw = raw.split(",")[0].trim().split(/\s+/)[0];
+    if (raw.startsWith("//")) raw = "https:" + raw;
+    try {
+      const resolved = baseUrl ? new URL(raw, baseUrl) : new URL(raw);
+      if (resolved.protocol !== "https:" && resolved.protocol !== "http:") return null;
+      return resolved.href;
+    } catch {
+      return null;
+    }
+  };
+
+  const fromHtml = (rawValue: string): string | null => {
+    const raw = rawValue
+      .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"').replace(/&#39;/g, "'");
+    const tags = raw.match(/<(?:img|source|video)\b[^>]*>/gi) || [];
+    for (const tag of tags) {
+      const attr = tag.match(/\b(?:src|data-src|data-lazy-src|data-original|data-original-src|poster|srcset)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+      const candidate = attr ? (attr[1] || attr[2] || attr[3]) : "";
+      const url = normalize(candidate);
+      if (url) return url;
+    }
+    return null;
+  };
+
+  const inspect = (value: unknown, depth = 0): string | null => {
+    if (depth > 5 || value === null || value === undefined) return null;
+    if (typeof value === "string") {
+      const direct = normalize(value);
+      if (direct && /\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(direct)) return direct;
+      return fromHtml(value);
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        const found = inspect(child, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof value === "object") {
+      const obj = value as Record<string, unknown>;
+      for (const key of urlKeys) {
+        const candidate = obj[key];
+        if (candidate !== undefined && candidate !== null) {
+          const url = normalize(candidate);
+          if (url) return url;
+        }
+      }
+      if (typeof obj["#text"] === "string") {
+        const found = fromHtml(String(obj["#text"]));
+        if (found) return found;
+      }
+      for (const key of imageKeys) {
+        if (obj[key] !== undefined) {
+          const found = inspect(obj[key], depth + 1);
+          if (found) return found;
+        }
       }
     }
+    return null;
+  };
+
+  for (const key of imageKeys) {
+    if (item[key] !== undefined) {
+      const found = inspect(item[key]);
+      if (found) return found;
+    }
+  }
+  // Final fallback for embedded image markup in publisher-provided text.
+  for (const key of ["content:encoded", "description", "summary", "content"]) {
+    const found = inspect(item[key]);
+    if (found) return found;
   }
   return null;
 }
@@ -265,7 +337,7 @@ async function parseFeed(source: any): Promise<any[]> {
     const content = cleanHtml(item["content:encoded"] || item.encoded || item.content || item.description);
     const published = safeDate(item.pubDate || item.published || item.updated || item.date);
     const external = text(item.guid || item.id || url).trim() || url || (title + "|" + published);
-    return { url, title, summary, content, published, external, image: imageOf(item) };
+    return { url, title, summary, content, published, external, image: imageOf(item, url) };
   }).filter((item: any) => item.title && item.url);
 }
 
