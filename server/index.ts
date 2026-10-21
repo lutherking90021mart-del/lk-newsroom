@@ -803,11 +803,11 @@ app.post('/v1/monetization/checkout',async(req,res)=>{
     const saved=await db.from('payment_transactions').insert({kind,provider,reference,email,amount,currency,donation_id:donationId,subscription_id:subscriptionId}).select('id').single();if(saved.error)throw saved.error;
     let checkoutUrl:string|undefined;
     if(provider==='paystack'){
-      const key=process.env.PAYSTACK_SECRET_KEY;if(!key)throw new Error('Paystack is not configured. Add PAYSTACK_SECRET_KEY in Railway.');
+      const key=undefined;if(!key)throw new Error('Paystack is not configured. Add PAYSTACK_SECRET_KEY in Railway.');
       const response=await fetch('https://api.paystack.co/transaction/initialize',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({email,amount:Math.round(amount*100),currency,reference,callback_url:paymentReturnUrl(req,reference),metadata:{kind,subscriptionId,donationId}})});
       const payload=await response.json() as any;if(!response.ok||!payload.status)throw new Error(payload.message||'Paystack could not start checkout.');checkoutUrl=payload.data?.authorization_url;
     }else{
-      const key=process.env.STRIPE_SECRET_KEY;if(!key)throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY in Railway.');
+      const key=undefined;if(!key)throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY in Railway.');
       if(kind==='subscription'&&!plan.stripe_price_id)throw new Error('This membership plan needs a Stripe Price ID before it can be purchased with Stripe.');
       const form=new URLSearchParams({success_url:`${paymentReturnUrl(req,reference)}&success=1`,cancel_url:`${paymentReturnUrl(req,reference)}&cancelled=1`,client_reference_id:reference,'metadata[reference]':reference});
       if(kind==='subscription'){form.set('mode','subscription');form.set('line_items[0][price]',plan.stripe_price_id);form.set('line_items[0][quantity]','1');}
@@ -822,12 +822,12 @@ app.get('/v1/monetization/payments/:reference',async(req,res)=>{
   if(error)return res.status(500).json({error:error.message});if(!data)return res.status(404).json({error:'Payment not found.'});res.json({data});
 });
 app.post('/v1/monetization/paystack/webhook',async(req,res)=>{
-  const secret=process.env.PAYSTACK_SECRET_KEY,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
+  const secret=undefined,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
   if(!secret||!providerSignatureMatches(secret,raw,String(req.headers['x-paystack-signature']||'')))return res.status(401).json({error:'Invalid payment signature.'});
   const event=req.body||{};if(event.event==='charge.success'&&event.data?.reference)await markPayment(String(event.data.reference),'paid',{event:event.event,reference:event.data.reference});res.sendStatus(200);
 });
 app.post('/v1/monetization/stripe/webhook',async(req,res)=>{
-  const secret=process.env.STRIPE_WEBHOOK_SECRET,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
+  const secret=undefined,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
   if(!secret||!stripeSignatureMatches(secret,raw,String(req.headers['stripe-signature']||'')))return res.status(401).json({error:'Invalid payment signature.'});
   const event=req.body||{};const reference=event.data?.object?.client_reference_id||event.data?.object?.metadata?.reference;if(['checkout.session.completed','invoice.paid'].includes(event.type)&&reference)await markPayment(String(reference),'paid',{event:event.type,providerId:event.data?.object?.id});res.sendStatus(200);
 });
@@ -853,7 +853,7 @@ app.post('/v1/admin/monetization/requests/:id/payment-link',requireStaff,async(r
     if(request.status!=='approved')return res.status(409).json({error:'Approve this request before generating a payment link.'});
     const amount=safeMoney(request.quoted_price);
     if(!amount)return res.status(400).json({error:'Set a quoted price greater than zero before generating a payment link.'});
-    const secret=process.env.PAYSTACK_SECRET_KEY;
+    const secret=undefined;
     if(!secret)return res.status(503).json({error:'Paystack is not configured. Add PAYSTACK_SECRET_KEY to the server environment.'});
     const currency=safeCurrency(request.currency)||'GHS';
     const reference=paymentReference();
