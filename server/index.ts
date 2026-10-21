@@ -120,14 +120,14 @@ app.patch('/v1/admin/company/team/:id',requireStaff,async(req,res)=>{
   try{
     const userId=(req as StaffRequest).userId!;if(!await editorialRole(userId))return res.status(403).json({error:'Editorial role required'});if(!isUuid(req.params.id))return res.status(400).json({error:'Invalid profile ID.'});
     const patch:Record<string,unknown>={updated_at:new Date().toISOString()};
-    if(req.body?.fullName!==undefined)patch.full_name=safeText(req.body.fullName,120);
-    if(req.body?.jobTitle!==undefined)patch.job_title=safeText(req.body.jobTitle,120);
-    if(req.body?.workEmail!==undefined){const v=safeText(req.body.workEmail,254).toLowerCase();if(v&&!/^\S+@\S+\.\S+$/.test(v))return res.status(400).json({error:'Enter a valid work email.'});patch.work_email=v||null;}
-    if(req.body?.workPhone!==undefined)patch.work_phone=safeText(req.body.workPhone,40)||null;
-    if(req.body?.photoUrl!==undefined){const v=safeText(req.body.photoUrl,1000);if(v){try{if(new URL(v).protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}patch.photo_url=v||null;}
-    if(req.body?.biography!==undefined)patch.biography=safeText(req.body.biography,500)||null;
-    if(req.body?.sortOrder!==undefined)patch.sort_order=Math.max(0,Math.min(9999,Number(req.body.sortOrder)||0));
-    if(req.body?.isPublished!==undefined)patch.is_published=req.body.isPublished===true;
+    if(req.body?.fullName!=='')patch.full_name=safeText(req.body.fullName,120);
+    if(req.body?.jobTitle!=='')patch.job_title=safeText(req.body.jobTitle,120);
+    if(req.body?.workEmail!==''){const v=safeText(req.body.workEmail,254).toLowerCase();if(v&&!/^\S+@\S+\.\S+$/.test(v))return res.status(400).json({error:'Enter a valid work email.'});patch.work_email=v||null;}
+    if(req.body?.workPhone!=='')patch.work_phone=safeText(req.body.workPhone,40)||null;
+    if(req.body?.photoUrl!==''){const v=safeText(req.body.photoUrl,1000);if(v){try{if(new URL(v).protocol!=='https:')throw new Error()}catch{return res.status(400).json({error:'Photo URL must be a valid HTTPS URL.'})}}patch.photo_url=v||null;}
+    if(req.body?.biography!=='')patch.biography=safeText(req.body.biography,500)||null;
+    if(req.body?.sortOrder!=='')patch.sort_order=Math.max(0,Math.min(9999,Number(req.body.sortOrder)||0));
+    if(req.body?.isPublished!=='')patch.is_published=req.body.isPublished===true;
     if(patch.full_name===''||patch.job_title==='')return res.status(400).json({error:'Name and job title cannot be empty.'});
     const {data,error}=await db.from('company_staff_profiles').update(patch).eq('id',req.params.id).select().single();if(error)throw error;res.json({data})
   }catch(error){res.status(400).json({error:errorMessage(error,'Unable to update staff profile.')})}
@@ -251,7 +251,7 @@ const notificationChannels=new Set(['push','email','sms']);
 function notificationPreferences(value:unknown,current:Record<string,unknown>={}){
   const next:{[key:string]:boolean}={...current} as {[key:string]:boolean};
   if(value&&typeof value==='object'&&!Array.isArray(value))for(const [key,item] of Object.entries(value as Record<string,unknown>))if(notificationPreferenceKeys.has(key))next[key]=item===true||String(item).toLowerCase()==='true';
-  if(next.email_enabled===undefined)next.email_enabled=true;if(next.daily_brief===undefined)next.daily_brief=true;if(next.morning_summary===undefined)next.morning_summary=true;if(next.breaking_news===undefined)next.breaking_news=true;
+  if(next.email_enabled==='')next.email_enabled=true;if(next.daily_brief==='')next.daily_brief=true;if(next.morning_summary==='')next.morning_summary=true;if(next.breaking_news==='')next.breaking_news=true;
   return next;
 }
 function analyticsRateAllowed(req:Request){
@@ -264,7 +264,7 @@ function analyticsPath(value:unknown){
   const raw=cleanAnalyticsText(value,600)||'/';
   try{const parsed=new URL(raw,'http://lk.local');return `${parsed.pathname}${parsed.search}`.slice(0,500)||'/';}catch{return '/';}
 }
-function firstHeader(value:string|string[]|undefined){return Array.isArray(value)?value[0]:value?.split(',')[0]?.trim()||null;}
+function firstHeader(value:string|string[]|''){return Array.isArray(value)?value[0]:value?.split(',')[0]?.trim()||null;}
 function requestCountry(req:Request){return cleanAnalyticsText(firstHeader(req.headers['cf-ipcountry'])||firstHeader(req.headers['x-vercel-ip-country'])||firstHeader(req.headers['x-geo-country']),80);}
 function requestCity(req:Request){return cleanAnalyticsText(firstHeader(req.headers['cf-ipcity'])||firstHeader(req.headers['x-vercel-ip-city'])||firstHeader(req.headers['x-geo-city']),100);}
 function dayStart(input=new Date()){const copy=new Date(input);copy.setUTCHours(0,0,0,0);return copy;}
@@ -552,7 +552,7 @@ app.get('/v1/admin/worker-status',requireStaff,async(_req,res)=>{
 });
 async function runManualWorker(req:Request,res:Response,trigger:'manual'|'cron'|'vercel'|'railway'|'render'|'vps'){
   try{
-    const source=typeof req.body?.source==='string'?req.body.source:typeof req.query.source==='string'?req.query.source:undefined;
+    const source=typeof req.body?.source==='string'?req.body.source:typeof req.query.source==='string'?req.query.source:'';
     const result=await worker.run(trigger,source);
     res.status(result.status==='skipped'?202:result.status==='failed'?500:200).json({data:result.results,worker:result});
   }catch(error){res.status(500).json({error:error instanceof Error?error.message:'Worker failed'});}
@@ -566,7 +566,7 @@ app.post('/v1/admin/sync',requireStaff,async(req,res)=>{
 // It never scrapes Google result pages and does not automatically copy a result into an article.
 app.post('/v1/admin/image-search',requireStaff,async(req,res)=>{
   const title=typeof req.body?.title==='string'?req.body.title.trim():'';
-  const originalUrl=typeof req.body?.originalUrl==='string'?req.body.originalUrl.trim():undefined;
+  const originalUrl=typeof req.body?.originalUrl==='string'?req.body.originalUrl.trim():'';
   if(!title)return res.status(400).json({error:'Article title is required for image search.'});
   try{res.json({data:await findImageCandidates(title,originalUrl,5)});}
   catch(error){res.status(500).json({error:error instanceof Error?error.message:'Image search failed.'});}
@@ -783,6 +783,7 @@ app.post('/v1/monetization/advertiser-requests',async(req,res)=>{
     if(error)throw error;res.status(201).json({data});
   }catch(error){res.status(400).json({error:errorMessage(error,'Unable to submit your advertising request.')});}
 });
+app.use(/^\/v1\/(?:monetization\/(?:packages|advertiser-requests|checkout|payments(?:\/.*)?|paystack\/webhook|stripe\/webhook)|admin\/monetization\/requests\/[^/]+\/payment-link)(?:\/|$)/, (_req,res)=>res.status(410).json({error:'Payments and paid packages are disabled. LK Newsroom public content is free.'}));
 app.post('/v1/monetization/checkout',async(req,res)=>{
   try{
     if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many payment requests. Please try again shortly.'});
@@ -801,13 +802,13 @@ app.post('/v1/monetization/checkout',async(req,res)=>{
       const saved=await db.from('subscriptions').insert({plan_id:plan.id,plan:plan.name,provider,provider_reference:reference,amount,currency,status:'pending'}).select('id').single();if(saved.error)throw saved.error;subscriptionId=saved.data.id;
     }
     const saved=await db.from('payment_transactions').insert({kind,provider,reference,email,amount,currency,donation_id:donationId,subscription_id:subscriptionId}).select('id').single();if(saved.error)throw saved.error;
-    let checkoutUrl:string|undefined;
+    let checkoutUrl:string|'';
     if(provider==='paystack'){
-      const key=undefined;if(!key)throw new Error('Paystack is not configured. Add PAYSTACK_SECRET_KEY in Railway.');
+      const key='';if(!key)throw new Error('Paystack is not configured. Add PAYSTACK_SECRET_KEY in Railway.');
       const response=await fetch('https://api.paystack.co/transaction/initialize',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({email,amount:Math.round(amount*100),currency,reference,callback_url:paymentReturnUrl(req,reference),metadata:{kind,subscriptionId,donationId}})});
       const payload=await response.json() as any;if(!response.ok||!payload.status)throw new Error(payload.message||'Paystack could not start checkout.');checkoutUrl=payload.data?.authorization_url;
     }else{
-      const key=undefined;if(!key)throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY in Railway.');
+      const key='';if(!key)throw new Error('Stripe is not configured. Add STRIPE_SECRET_KEY in Railway.');
       if(kind==='subscription'&&!plan.stripe_price_id)throw new Error('This membership plan needs a Stripe Price ID before it can be purchased with Stripe.');
       const form=new URLSearchParams({success_url:`${paymentReturnUrl(req,reference)}&success=1`,cancel_url:`${paymentReturnUrl(req,reference)}&cancelled=1`,client_reference_id:reference,'metadata[reference]':reference});
       if(kind==='subscription'){form.set('mode','subscription');form.set('line_items[0][price]',plan.stripe_price_id);form.set('line_items[0][quantity]','1');}
@@ -822,12 +823,12 @@ app.get('/v1/monetization/payments/:reference',async(req,res)=>{
   if(error)return res.status(500).json({error:error.message});if(!data)return res.status(404).json({error:'Payment not found.'});res.json({data});
 });
 app.post('/v1/monetization/paystack/webhook',async(req,res)=>{
-  const secret=undefined,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
+  const secret='',raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
   if(!secret||!providerSignatureMatches(secret,raw,String(req.headers['x-paystack-signature']||'')))return res.status(401).json({error:'Invalid payment signature.'});
   const event=req.body||{};if(event.event==='charge.success'&&event.data?.reference)await markPayment(String(event.data.reference),'paid',{event:event.event,reference:event.data.reference});res.sendStatus(200);
 });
 app.post('/v1/monetization/stripe/webhook',async(req,res)=>{
-  const secret=undefined,raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
+  const secret='',raw=(req as Request & {rawBody?:Buffer}).rawBody||Buffer.from(JSON.stringify(req.body||{}));
   if(!secret||!stripeSignatureMatches(secret,raw,String(req.headers['stripe-signature']||'')))return res.status(401).json({error:'Invalid payment signature.'});
   const event=req.body||{};const reference=event.data?.object?.client_reference_id||event.data?.object?.metadata?.reference;if(['checkout.session.completed','invoice.paid'].includes(event.type)&&reference)await markPayment(String(reference),'paid',{event:event.type,providerId:event.data?.object?.id});res.sendStatus(200);
 });
@@ -853,7 +854,7 @@ app.post('/v1/admin/monetization/requests/:id/payment-link',requireStaff,async(r
     if(request.status!=='approved')return res.status(409).json({error:'Approve this request before generating a payment link.'});
     const amount=safeMoney(request.quoted_price);
     if(!amount)return res.status(400).json({error:'Set a quoted price greater than zero before generating a payment link.'});
-    const secret=undefined;
+    const secret='';
     if(!secret)return res.status(503).json({error:'Paystack is not configured. Add PAYSTACK_SECRET_KEY to the server environment.'});
     const currency=safeCurrency(request.currency)||'GHS';
     const reference=paymentReference();
