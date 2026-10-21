@@ -10,8 +10,6 @@ type Env = {
   R2_PUBLIC_BASE_URL?: string;
   GUARDIAN_API_KEY?: string;
   NEWS_API_KEY?: string;
-  PAYSTACK_SECRET_KEY?: string;
-  STRIPE_SECRET_KEY?: string;
 };
 
 const parser = new XMLParser({
@@ -572,8 +570,8 @@ async function beginCheckout(request: Request, env: Env, origin: string) {
     if (!["donation", "subscription"].includes(kind)) return json({ error: "Choose a donation or membership checkout." }, 400, origin);
     if (!["paystack", "stripe"].includes(provider)) return json({ error: "Choose Paystack or Stripe." }, 400, origin);
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return json({ error: "Enter a valid email address." }, 400, origin);
-    if (provider === "paystack" && !env.PAYSTACK_SECRET_KEY) return json({ error: "Paystack checkout has not been configured for this Cloudflare deployment yet." }, 503, origin);
-    if (provider === "stripe" && !env.STRIPE_SECRET_KEY) return json({ error: "Stripe checkout has not been configured for this Cloudflare deployment yet." }, 503, origin);
+    if (provider === "paystack" && !undefined) return json({ error: "Paystack checkout has not been configured for this Cloudflare deployment yet." }, 503, origin);
+    if (provider === "stripe" && !undefined) return json({ error: "Stripe checkout has not been configured for this Cloudflare deployment yet." }, 503, origin);
 
     let amount = 0;
     let currency = String(body.currency || "GHS").trim().toUpperCase();
@@ -633,7 +631,7 @@ async function beginCheckout(request: Request, env: Env, origin: string) {
         else payload.amount = String(Math.round(amount * 100));
         const response = await fetch("https://api.paystack.co/transaction/initialize", {
           method: "POST",
-          headers: { authorization: "Bearer " + env.PAYSTACK_SECRET_KEY, "content-type": "application/json" },
+          headers: { authorization: "Bearer " + undefined, "content-type": "application/json" },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(15000)
         });
@@ -675,7 +673,7 @@ async function beginCheckout(request: Request, env: Env, origin: string) {
         }
         const response = await fetch("https://api.stripe.com/v1/checkout/sessions", {
           method: "POST",
-          headers: { authorization: "Bearer " + env.STRIPE_SECRET_KEY, "content-type": "application/x-www-form-urlencoded" },
+          headers: { authorization: "Bearer " + undefined, "content-type": "application/x-www-form-urlencoded" },
           body: session.toString(),
           signal: AbortSignal.timeout(15000)
         });
@@ -716,9 +714,9 @@ async function verifyPayment(reference: string, env: Env, origin: string) {
   let verifiedResponse: any = {};
   const now = new Date().toISOString();
   try {
-    if (row.provider === "paystack" && env.PAYSTACK_SECRET_KEY) {
+    if (row.provider === "paystack" && undefined) {
       const response = await fetch("https://api.paystack.co/transaction/verify/" + encodeURIComponent(reference), {
-        headers: { authorization: "Bearer " + env.PAYSTACK_SECRET_KEY },
+        headers: { authorization: "Bearer " + undefined },
         signal: AbortSignal.timeout(12000)
       });
       const data = await response.json() as any;
@@ -728,13 +726,13 @@ async function verifyPayment(reference: string, env: Env, origin: string) {
       successful = Boolean(response.ok && data.status && transaction.status === "success" && transaction.reference === reference && paidAmount === Math.round(Number(row.amount) * 100) && paidCurrency === String(row.currency).toUpperCase());
       providerSubscriptionId = transaction.subscription?.subscription_code || transaction.subscription_code || null;
       verifiedResponse = { provider: "paystack", reference, status: transaction.status || "pending", verified: successful };
-    } else if (row.provider === "stripe" && env.STRIPE_SECRET_KEY) {
+    } else if (row.provider === "stripe" && undefined) {
       let saved: any = {};
       try { saved = JSON.parse(String(row.provider_response || "{}")); } catch {}
       const sessionId = String(saved.sessionId || "");
       if (!sessionId) return json({ data: { reference: row.reference, status: row.status } }, 200, origin);
       const response = await fetch("https://api.stripe.com/v1/checkout/sessions/" + encodeURIComponent(sessionId), {
-        headers: { authorization: "Bearer " + env.STRIPE_SECRET_KEY },
+        headers: { authorization: "Bearer " + undefined },
         signal: AbortSignal.timeout(12000)
       });
       const session = await response.json() as any;
@@ -777,11 +775,11 @@ function fixedTimeEquals(left: string, right: string) {
 }
 
 async function handlePaystackWebhook(request: Request, env: Env, origin: string) {
-  if (!env.PAYSTACK_SECRET_KEY) return json({ error: "Paystack webhook is not configured." }, 503, origin);
+  if (!undefined) return json({ error: "Paystack webhook is not configured." }, 503, origin);
   const signature = request.headers.get("x-paystack-signature") || "";
   if (!signature || signature.length > 256) return json({ error: "Missing Paystack signature." }, 401, origin);
   const raw = await request.text();
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.PAYSTACK_SECRET_KEY), { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(undefined), { name: "HMAC", hash: "SHA-512" }, false, ["sign"]);
   const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(raw));
   const expected = Array.from(new Uint8Array(signed), byte => byte.toString(16).padStart(2, "0")).join("");
   if (!fixedTimeEquals(signature.toLowerCase(), expected)) return json({ error: "Invalid Paystack signature." }, 401, origin);
@@ -1353,6 +1351,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const origin = url.hostname.endsWith(".workers.dev") ? url.origin : (env.PUBLIC_ORIGIN || url.origin);
+  if (/^\/v1\/monetization\/(checkout|payments\/|paystack\/webhook|stripe\/webhook)/.test(path) ||
+      /^\/v1\/admin\/monetization\/advertiser-requests\/[^/]+\/payment-link$/.test(path)) {
+    return json({ error: "Payments are disabled. LK Newsroom public content is free." }, 410, origin);
+  }
   if (path === "/admin" || path === "/admin/") {
     return Response.redirect(new URL("/admin/index.html", url.origin).toString(), 302);
   }
