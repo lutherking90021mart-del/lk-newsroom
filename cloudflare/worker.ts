@@ -10,6 +10,8 @@ type Env = {
   R2_PUBLIC_BASE_URL?: string;
   GUARDIAN_API_KEY?: string;
   NEWS_API_KEY?: string;
+  PAYSTACK_SECRET_KEY?: string;
+  STRIPE_SECRET_KEY?: string;
 };
 
 const parser = new XMLParser({
