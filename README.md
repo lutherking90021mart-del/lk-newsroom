@@ -232,9 +232,9 @@ After it is applied, open **Admin → Ads** to create campaigns for header, hero
 
 The public site records first-party page events for the live Analytics screen using a random browser ID stored locally; it does not collect IP addresses. Country is based only on a browser regional setting when the browser provides one. Article pages now include canonical URLs, Open Graph and Twitter card metadata, JSON-LD `NewsArticle` data, plus `/sitemap.xml` and `/robots.txt`.
 
-## Complete monetization suite
+## Legacy monetization schema (public payments disabled)
 
-Run `supabase/monetization-suite-upgrade.sql` after the earlier Supabase migrations. It creates the advertising packages, advertiser requests, sponsored-story disclosures, affiliate campaigns and links, membership plans, donations, subscriptions, payment records, indexes, Row Level Security rules, and live update tables.
+The repository retains the old tables for advertising enquiries, sponsorship/affiliate reporting, memberships, donations and payment history. They are retained for historical records and internal reporting; public reader checkout, paid memberships, subscriptions, paid promotion packages and payment-link creation are disabled. Do not run the migration solely to enable reader payments.
 
 After deployment, use these areas:
 
