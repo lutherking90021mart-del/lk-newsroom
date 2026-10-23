@@ -232,25 +232,18 @@ After it is applied, open **Admin → Ads** to create campaigns for header, hero
 
 The public site records first-party page events for the live Analytics screen using a random browser ID stored locally; it does not collect IP addresses. Country is based only on a browser regional setting when the browser provides one. Article pages now include canonical URLs, Open Graph and Twitter card metadata, JSON-LD `NewsArticle` data, plus `/sitemap.xml` and `/robots.txt`.
 
-## Complete monetization suite
+## Legacy monetization schema (public payments disabled)
 
-Run `supabase/monetization-suite-upgrade.sql` after the earlier Supabase migrations. It creates the advertising packages, advertiser requests, sponsored-story disclosures, affiliate campaigns and links, membership plans, donations, subscriptions, payment records, indexes, Row Level Security rules, and live update tables.
+The repository retains the old tables for advertising enquiries, sponsorship/affiliate reporting, memberships, donations and payment history. They are retained for historical records and internal reporting; public reader checkout, paid memberships, subscriptions, paid promotion packages and payment-link creation are disabled. Do not run the migration solely to enable reader payments.
 
 After deployment, use these areas:
 
 - **Admin → Ads** for direct banner campaigns, scheduled placements, AdSense slots, and measured impressions/clicks.
-- **Admin → Monetization** for public advertising packages, advertiser request review, sponsored story disclosure, affiliate links, reader membership plans, donations, and payment activity.
-- **Advertise with LK Newsroom** (`/pages/advertise.html`) for companies to send their campaign request.
-- **Support LK Newsroom** (`/pages/support.html`) for memberships and one-time reader donations.
+- **Admin → Monetization** explains free reader access and optional support. Paid reader packages, memberships, subscriptions, and checkout controls are disabled; historical financial records are retained.
+- **Community announcements** (`/pages/advertise.html`) for readers and organisations to submit community news free of charge, subject to editorial review.
+- **Support LK Newsroom** (`/pages/support.html`) for free-readership information and a contact route for optional voluntary support. Support never unlocks content.
 
-For payments, add only server-side Railway variables: payment-provider secrets (payments are disabled). Configure the provider webhooks to call:
-
-```text
-https://YOUR-DOMAIN/v1/monetization/paystack/webhook
-https://YOUR-DOMAIN/v1/monetization/stripe/webhook
-```
-
-Never enter payment secrets in a public page or in the admin browser. Before accepting real payments, complete the provider account verification, test using their test mode, and verify each successful test produces one payment record and one revenue record in Admin → Monetization.
+Public reader checkout and paid-access payments are intentionally disabled. Do not configure or expose payment-provider secrets to re-enable reader charges. Voluntary support is handled by contacting the newsroom team; it is never required for access and never buys editorial coverage.
 
 ## Football coverage
 

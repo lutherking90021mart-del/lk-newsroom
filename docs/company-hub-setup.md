@@ -1,6 +1,6 @@
 # LK Newsroom Company Hub setup
 
-The company hub lives at `/pages/company.html` and is proposed in pull request #4. It is intentionally kept on the feature branch until reviewed.
+The Company Hub lives at `/pages/company.html`. Public reader payments and paid access are disabled; the hub offers only free community submissions, contact information and an optional voluntary-support contact route.
 
 ## Enable the AI assistant
 
@@ -33,9 +33,9 @@ Put approved portraits under `assets/team/` (prefer WebP or JPEG, crop to a squa
 
 The current form opens the visitor's email application with a prefilled message. It does not store submissions on the server. To build a true shared enquiry inbox later, add server-side validation, spam protection, delivery and retention policies before switching the form to server submission.
 
-## Payment safety
+## Free access and optional reader support
 
-The payment details on the page are displayed as provided by the site owner. Because the bank and Mobile Money recipient names differ, customers are instructed to confirm the recipient and amount against an approved quote/invoice before transferring. Do not represent manual transfer payments as automatically verified.
+All public news and features must remain free. The Company Hub no longer publishes bank or Mobile Money details and does not provide reader checkout, paid memberships, subscriptions or paid promotion packages. Readers who wish to support LK Newsroom may contact the team for verified voluntary-support options; support never unlocks content or buys editorial coverage. Do not provide bank/account details, request payments, or ask for PINs, passwords or one-time codes.
 
 
 ## Shared enquiries inbox and staff profiles

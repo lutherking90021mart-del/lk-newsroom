@@ -11,7 +11,7 @@ The branch currently contains:
 - a migration helper that can copy actual public-bucket files from Supabase Storage to the existing R2 bucket and create an old-URL/new-URL mapping;
 - Cloudflare-native admin login/session and password-change routes, staff enrollment/role checks, a D1-backed query compatibility API, and R2 media list/upload/delete endpoints;
 - APIs for public ads, advertising requests, newsletter subscription, football scores and match centre;
-- server-side Paystack/Stripe checkout verification code, plus a signature-verified Paystack webhook;
+- legacy server-side Paystack/Stripe code remains for reference, but public checkout routes are disabled;
 - CI checks for application/Worker TypeScript, Python importer syntax, D1 schema execution, admin module syntax, private archive script and static build.
 
 **Not yet complete:** no remote D1 database has been created/seeded, no Worker has been deployed/tested on its preview URL, and no actual media file copy has been completed. The admin/auth/media code has passed static checks but has not completed an end-to-end deployed test. Remaining admin workflows—especially notification delivery, social-account reconnection/publishing, password-reset email, and full feature parity—still need porting and testing. Do not point the production domain at Cloudflare until the cutover checklist is complete.
@@ -158,7 +158,7 @@ Build the static assets with the special preview client (it removes the browser'
 node scripts/buildCloudflareAssets.mjs
 ```
 
-Before deploying, configure these **as Worker secrets**, not in source files: `CRON_SECRET`, any needed `NEWS_API_KEY` or `GUARDIAN_API_KEY`, and payment secrets `PAYSTACK_SECRET_KEY` / `STRIPE_SECRET_KEY` only if you want to enable those providers. Keep the values private. You can set them using `npx wrangler secret put SECRET_NAME`.
+Before deploying, configure these **as Worker secrets**, not in source files: `CRON_SECRET` and any needed `NEWS_API_KEY` or `GUARDIAN_API_KEY`. Public checkout and paid reader access are disabled. Do not set payment-provider secrets to re-enable reader charges. Keep all operational secrets private. You can set required secrets using `npx wrangler secret put SECRET_NAME`.
 
 Deploy a preview Worker using `npx wrangler deploy`. Do not configure a custom domain yet. Test its `workers.dev` URL:
 - `/health`
@@ -166,10 +166,10 @@ Deploy a preview Worker using `npx wrangler deploy`. Do not configure a custom d
 - `/v1/breaking`, `/v1/videos`, `/v1/categories/ghana`
 - `/v1/football/fixtures?date=YYYY-MM-DD`
 - newsletter and advertiser quote submission;
-- donation checkout and payment verification with the payment provider's test/sandbox credentials, then real credentials only after sandbox verification;
+- optional reader support is handled by contacting the newsroom team; public checkout and paid reader access stay disabled;
 - multiple scheduled ingestions, logs and deduplication.
 
-For Paystack, configure its webhook to the deployed Worker URL ending in `/v1/webhooks/paystack` only after verifying the preview endpoint. Stripe checkout return verification is present, but Stripe webhook and recurring-membership lifecycle parity still need separate implementation/testing.
+Do not configure payment-provider webhooks for public reader checkout. Legacy payment handlers remain in source for reference but public payment initiation is disabled by the Worker route guard. Optional support is handled by contacting the newsroom team and never controls article access.
 
 Cron is scheduled every five minutes (UTC). Do not remove the existing Render/Railway scheduler while preview testing. The database lock prevents overlapping Worker runs, and the query deduplication checks existing source/external IDs; this is not a reason to run two production ingestion systems indefinitely.
 
