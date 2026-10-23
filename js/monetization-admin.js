@@ -1,7 +1,4 @@
 const $=(selector,parent=document)=>parent.querySelector(selector);
-const esc=(value='')=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
-const apiRoot=()=>window.LK_AGGREGATOR_API_URL||location.origin;
-async function adminRequest(path,options={}){const {data:session}=await (await import('./admin-client.js')).supabase.auth.getSession();const response=await fetch(`${apiRoot()}${path}`,{...options,headers:{'Content-Type':'application/json',Authorization:`Bearer ${session.session?.access_token||''}`,...(options.headers||{})}});const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload.error||'Request failed.');return payload;}
 
 export async function mountMonetizationSuite(){
   const view=$('#admin-view');
