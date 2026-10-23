@@ -1,6 +1,6 @@
 # LK Newsroom Company Hub setup
 
-The company hub lives at `/pages/company.html` and is proposed in pull request #4. It is intentionally kept on the feature branch until reviewed.
+The Company Hub lives at `/pages/company.html`. Public reader payments and paid access are disabled; the hub offers only free community submissions, contact information and an optional voluntary-support contact route.
 
 ## Enable the AI assistant
 
