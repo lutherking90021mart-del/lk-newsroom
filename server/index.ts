@@ -156,7 +156,7 @@ app.post('/v1/company/chat',async(req,res)=>{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        systemInstruction:{parts:[{text:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. Advertising requests are reviewed first; customers must receive an approved quote/invoice before paying, and campaigns must not be treated as paid until payment is confirmed. Advertising requests can be submitted at pages/advertise.html on the website. Payment information currently displayed by the company: Fidelity Bank account name Martin Luther Awuzah, account number 2600778600414; Mobile Money recipient Charles Adjei, number 0557697377. Because the recipient names differ, advise users to confirm the correct recipient and amount with the company before transfer. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'}]},
+        systemInstruction:{parts:[{text:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. All public news articles, videos, categories and live scores are free. LK Newsroom does not sell reader memberships, subscriptions, premium reports, paid article access or paid promotion packages; do not request payment or generate payment instructions. Community announcements, story tips and correction requests are free to submit, subject to editorial review. Voluntary support is optional and never unlocks content or influence editorial decisions. If a reader asks how to support voluntarily, direct them to contact lutherking90021mart@gmail.com or https://wa.me/233559627349 for verified options. Never provide bank or mobile-money recipient/account details, payment links, prices, or financial instructions. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'}]},
         contents:[{role:'user',parts:[{text:question}]}],
         generationConfig:{temperature:0.3,maxOutputTokens:350}
       })
@@ -764,12 +764,10 @@ function stripeSignatureMatches(secret:string,raw:Buffer,header:string){
   if(!timestamp||!received||Math.abs(Date.now()/1000-Number(timestamp))>300)return false;
   return providerSignatureMatches(secret,Buffer.from(`${timestamp}.${raw.toString('utf8')}`),received,'sha256');
 }
-app.get('/v1/monetization/packages',async(_req,res)=>{
-  try{const [packages,plans]=await Promise.all([
-    db.from('advertising_packages').select('id,title,slug,description,placement,price,currency,duration_days,features').eq('active',true).order('sort_order'),
-    db.from('membership_plans').select('id,name,slug,description,features,amount,currency,interval').eq('active',true).order('sort_order')
-  ]);if(packages.error)throw packages.error;if(plans.error)throw plans.error;res.json({packages:packages.data||[],plans:plans.data||[]});}
-  catch(error){res.status(503).json({error:errorMessage(error,'Monetisation is temporarily unavailable. Run monetization-suite-upgrade.sql in Supabase first.')});}
+app.get('/v1/monetization/packages',(_req,res)=>{
+  // Older clients may still request this endpoint; never expose paid reader plans or prices.
+  // Returning an empty, successful response avoids unnecessary database reads as well.
+  res.set('Cache-Control','no-store').json({packages:[],plans:[],paymentsEnabled:false,readerAccess:'free',support:'optional'});
 });
 app.post('/v1/monetization/advertiser-requests',async(req,res)=>{
   try{
