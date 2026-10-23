@@ -232,25 +232,15 @@ After it is applied, open **Admin → Ads** to create campaigns for header, hero
 
 The public site records first-party page events for the live Analytics screen using a random browser ID stored locally; it does not collect IP addresses. Country is based only on a browser regional setting when the browser provides one. Article pages now include canonical URLs, Open Graph and Twitter card metadata, JSON-LD `NewsArticle` data, plus `/sitemap.xml` and `/robots.txt`.
 
-## Complete monetization suite
+## Free public access and voluntary support
 
-Run `supabase/monetization-suite-upgrade.sql` after the earlier Supabase migrations. It creates the advertising packages, advertiser requests, sponsored-story disclosures, affiliate campaigns and links, membership plans, donations, subscriptions, payment records, indexes, Row Level Security rules, and live update tables.
+All public news articles, categories, videos, live updates and newsroom features are free to read. There is no paywall, reader subscription, premium-content charge, fee for community announcements, or public checkout. Community news tips, corrections and announcements can be submitted free of charge and remain subject to editorial review.
 
-After deployment, use these areas:
+The public **Support LK Newsroom** page (`/pages/support.html`) explains that voluntary support is welcome but never required. People who choose to contribute should contact the newsroom through its official email or WhatsApp for current, verified options. Do not publish unverified bank or Mobile Money details, send unsolicited payment requests, or make contributions a condition of access.
 
-- **Admin → Ads** for direct banner campaigns, scheduled placements, AdSense slots, and measured impressions/clicks.
-- **Admin → Monetization** for public advertising packages, advertiser request review, sponsored story disclosure, affiliate links, reader membership plans, donations, and payment activity.
-- **Advertise with LK Newsroom** (`/pages/advertise.html`) for companies to send their campaign request.
-- **Support LK Newsroom** (`/pages/support.html`) for memberships and one-time reader donations.
+Paid reader memberships, paid advertising packages, advertiser checkout/payment links, and public payment verification endpoints are disabled in both the Cloudflare Worker and the Node server. The Admin → Monetization screen now displays the free-access policy and no longer creates plans or payment links. Existing database tables and historic finance records are retained for audit/compatibility; they are not deleted by this change.
 
-For payments, add only server-side Railway variables: payment-provider secrets (payments are disabled). Configure the provider webhooks to call:
-
-```text
-https://YOUR-DOMAIN/v1/monetization/paystack/webhook
-https://YOUR-DOMAIN/v1/monetization/stripe/webhook
-```
-
-Never enter payment secrets in a public page or in the admin browser. Before accepting real payments, complete the provider account verification, test using their test mode, and verify each successful test produces one payment record and one revenue record in Admin → Monetization.
+**AdSense and display advertising:** ads may still appear as publisher-funded advertising. They are not a fee charged by LK Newsroom to read an article. Keep publisher credentials and configuration secure, and don't add any reader paywall around ads or articles.
 
 ## Football coverage
 
