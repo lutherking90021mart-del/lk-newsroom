@@ -169,7 +169,7 @@ Deploy a preview Worker using `npx wrangler deploy`. Do not configure a custom d
 - optional reader support is handled by contacting the newsroom team; public checkout and paid reader access stay disabled;
 - multiple scheduled ingestions, logs and deduplication.
 
-For Paystack, configure its webhook to the deployed Worker URL ending in `/v1/webhooks/paystack` only after verifying the preview endpoint. Stripe checkout return verification is present, but Stripe webhook and recurring-membership lifecycle parity still need separate implementation/testing.
+Do not configure payment-provider webhooks for public reader checkout. Legacy payment handlers remain in source for reference but public payment initiation is disabled by the Worker route guard. Optional support is handled by contacting the newsroom team and never controls article access.
 
 Cron is scheduled every five minutes (UTC). Do not remove the existing Render/Railway scheduler while preview testing. The database lock prevents overlapping Worker runs, and the query deduplication checks existing source/external IDs; this is not a reason to run two production ingestion systems indefinitely.
 
