@@ -1355,7 +1355,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   const origin = url.hostname.endsWith(".workers.dev") ? url.origin : (env.PUBLIC_ORIGIN || url.origin);
   if (/^\/v1\/monetization\/(packages|advertiser-requests|checkout|payments\/|paystack\/webhook|stripe\/webhook)/.test(path) ||
       /^\/v1\/admin\/monetization\/requests\/[^/]+\/payment-link$/.test(path)) {
-    return json({ error: "Payments are disabled. LK Newsroom public content is free." }, 410, origin);
+    return json({ error: "Paid reader memberships, packages, and checkout are disabled. LK Newsroom public content and community announcements are free. Voluntary support is optional; contact the newsroom directly." }, 410, origin);
   }
   if (path === "/admin" || path === "/admin/") {
     return Response.redirect(new URL("/admin/index.html", url.origin).toString(), 302);
