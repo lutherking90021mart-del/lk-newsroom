@@ -32,6 +32,20 @@ app.use(cors({origin:process.env.PUBLIC_ORIGIN?.split(',')||true}));
 // Keep the raw request body only for payment-provider signature verification.
 // Normal application code continues to receive the parsed JSON body.
 app.use(express.json({limit:'8mb',verify:(req,_res,buffer)=>{(req as Request & {rawBody?:Buffer}).rawBody=Buffer.from(buffer);}}));
+/**
+ * Free-access policy: block all public checkout, reader membership, paid package,
+ * payment verification/webhook, and advertiser payment-link routes before their
+ * legacy handlers can run. Optional voluntary support is arranged directly with
+ * the newsroom; no payment is required to read or submit public content.
+ */
+app.use((req,res,next)=>{
+  const path=req.path;
+  const paymentRoute=/^\\/v1\\/monetization\\/(?:packages|advertiser-requests|checkout|payments(?:\\/.*)?|paystack\\/webhook|stripe\\/webhook)(?:\\/|$)/.test(path);
+  const advertiserPaymentLink=/^\\/v1\\/admin\\/monetization\\/requests\\/[^/]+\\/payment-link(?:\\/|$)/.test(path);
+  if(!paymentRoute&&!advertiserPaymentLink)return next();
+  return res.status(410).json({error:'Checkout, paid reader memberships and paid packages are disabled. LK Newsroom content and community announcements are free. Voluntary support is optional; contact the newsroom directly.'});
+});
+
 
 // Public football data proxy. API_FOOTBALL_KEY remains server-side and is never sent to clients.
 app.use('/v1/football',footballApiRouter);
@@ -156,7 +170,7 @@ app.post('/v1/company/chat',async(req,res)=>{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        systemInstruction:{parts:[{text:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. Advertising requests are reviewed first; customers must receive an approved quote/invoice before paying, and campaigns must not be treated as paid until payment is confirmed. Advertising requests can be submitted at pages/advertise.html on the website. Payment information currently displayed by the company: Fidelity Bank account name Martin Luther Awuzah, account number 2600778600414; Mobile Money recipient Charles Adjei, number 0557697377. Because the recipient names differ, advise users to confirm the correct recipient and amount with the company before transfer. Never ask for PINs, passwords, OTPs or full card details. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'}]},
+        systemInstruction:{parts:[{text:'You are the official LK Newsroom Global website assistant. Answer clearly and briefly using only these verified details: LK Newsroom Global is a digital news/media platform under Lutherking Multimedia. Company lead: Martin Luther Awuzah. Contact email: lutherking90021mart@gmail.com. Phone/WhatsApp: +233 55 962 7349. Website: https://lknewsroom.online. All public news articles, videos, categories and newsroom updates are free. There is no reader paywall, paid membership, premium content fee, paid community announcement fee, or public checkout. Community announcements, news tips and corrections are free to submit and are subject to editorial review; never promise publication. Paid advertising packages and payment links are disabled. Voluntary financial support is optional and is never required to access content or receive a service. If someone asks how to contribute, do not supply bank or Mobile Money details and do not request a transfer; direct them to contact the newsroom on https://wa.me/233559627349 or lutherking90021mart@gmail.com for current, verified options. Never claim a payment has been verified, a campaign approved, a staff member available, or a policy exists unless stated here. Never ask for PINs, passwords, OTPs or full card details. If you do not know something, say so and offer a WhatsApp handoff using https://wa.me/233559627349. Do not invent staff details, prices, analytics, or promises.'}]},
         contents:[{role:'user',parts:[{text:question}]}],
         generationConfig:{temperature:0.3,maxOutputTokens:350}
       })
@@ -783,7 +797,6 @@ app.post('/v1/monetization/advertiser-requests',async(req,res)=>{
     if(error)throw error;res.status(201).json({data});
   }catch(error){res.status(400).json({error:errorMessage(error,'Unable to submit your advertising request.')});}
 });
-app.use(/^\/v1\/(?:monetization\/(?:packages|advertiser-requests|checkout|payments(?:\/.*)?|paystack\/webhook|stripe\/webhook)|admin\/monetization\/requests\/[^/]+\/payment-link)(?:\/|$)/, (_req,res)=>res.status(410).json({error:'Payments and paid packages are disabled. LK Newsroom public content is free.'}));
 app.post('/v1/monetization/checkout',async(req,res)=>{
   try{
     if(!analyticsRateAllowed(req))return res.status(429).json({error:'Too many payment requests. Please try again shortly.'});
