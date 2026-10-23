@@ -1353,9 +1353,9 @@ async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
   const origin = url.hostname.endsWith(".workers.dev") ? url.origin : (env.PUBLIC_ORIGIN || url.origin);
-  if (/^\/v1\/monetization\/(packages|advertiser-requests|checkout|payments\/|paystack\/webhook|stripe\/webhook)/.test(path) ||
+  if (/^\/v1\/monetization\/(?:packages|advertiser-requests|checkout|payments(?:\/.*)?|paystack\/webhook|stripe\/webhook)(?:\/|$)/.test(path) ||
       /^\/v1\/admin\/monetization\/requests\/[^/]+\/payment-link$/.test(path)) {
-    return json({ error: "Payments are disabled. LK Newsroom public content is free." }, 410, origin);
+    return json({ error: "Paid reader access and checkout are disabled. LK Newsroom public content is free; voluntary support is optional." }, 410, origin);
   }
   if (path === "/admin" || path === "/admin/") {
     return Response.redirect(new URL("/admin/index.html", url.origin).toString(), 302);
