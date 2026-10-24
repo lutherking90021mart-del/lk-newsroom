@@ -32,7 +32,7 @@ const categoryDetails={
   latest:{title:'Latest News',subtitle:'The newest verified reporting, analysis and explainers from LK Newsroom.'}
 };
 function selectedCategory(){const route=location.pathname.match(/^\/category\/([^/]+)\/?$/);const requested=route?decodeURIComponent(route[1]):query.get('category')||document.body.dataset.category||'Latest';return categories.find(([name])=>categorySlug(name)===categorySlug(requested))?.[0]||'Latest';}
-const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Updated just now';if(minutes<60)return `Updated ${minutes} minute${minutes===1?'':'s'} ago`;const hours=Math.floor(minutes/60);if(hours<24)return `Updated ${hours} hour${hours===1?'':'s'} ago`;const days=Math.floor(hours/24);return days===1?'Updated yesterday':`Updated ${days} days ago`;};
+const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Published just now';if(minutes<60)return 'Published '+minutes+' minute'+(minutes===1?'':'s')+' ago';const hours=Math.floor(minutes/60);if(hours<24)return 'Published '+hours+' hour'+(hours===1?'':'s')+' ago';const days=Math.floor(hours/24);return days===1?'Published yesterday':'Published '+days+' days ago';}
 const uiDate=date=>new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date));
 const toUiArticle=row=>({
   id:row.id,slug:row.slug||row.id,title:row.title,excerpt:row.excerpt||row.ai_summary||'',

@@ -1,5 +1,4 @@
-PRAGMA foreign_keys = OFF;
-
+-- D1 enforces foreign keys; import data in dependency order.
 CREATE TABLE IF NOT EXISTS categories (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -48,6 +47,7 @@ CREATE TABLE IF NOT EXISTS articles (
   title TEXT NOT NULL,
   excerpt TEXT,
   content TEXT,
+  content_markdown TEXT,
   ai_summary TEXT,
   featured_image_url TEXT,
   original_url TEXT,
@@ -182,6 +182,19 @@ CREATE TABLE IF NOT EXISTS advertisements (
   image_url TEXT,
   target_url TEXT,
   html_content TEXT,
+  title TEXT,
+  description TEXT,
+  ad_type TEXT NOT NULL DEFAULT 'direct',
+  adsense_slot TEXT,
+  popup_delay_seconds INTEGER NOT NULL DEFAULT 8,
+  display_frequency TEXT NOT NULL DEFAULT 'session',
+  status TEXT NOT NULL DEFAULT 'active',
+  price REAL,
+  currency TEXT DEFAULT 'GHS',
+  campaign_goal TEXT,
+  mobile_sticky INTEGER NOT NULL DEFAULT 0,
+  advertiser_id TEXT,
+  advertiser_request_id TEXT,
   starts_at TEXT,
   ends_at TEXT,
   active INTEGER NOT NULL DEFAULT 1,

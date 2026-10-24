@@ -53,50 +53,37 @@ If the real-file Storage migration has succeeded and generated `cloudflare-media
 
 ## Windows: one-command Cloudflare preview runner (recommended)
 
-This runner consolidates the repeated PowerShell commands. It starts in **dry-run mode** and makes no Cloudflare changes unless you pass `-Apply`.
+This runner consolidates the migration into one guarded command. It starts in **dry-run mode** and makes no Cloudflare changes unless you pass `-Apply`.
 
-From PowerShell, clone this branch and run the local validation:
+From PowerShell, in the existing clone folder:
 
 ```powershell
-git clone https://github.com/lutherking90021mart-del/lk-newsroom.git
-cd lk-newsroom
-git checkout migration/one-command-cloudflare-import
+cd "$env:USERPROFILE\Documents\LK-Newsroom-Cloudflare-Migration"
+git pull
 Set-ExecutionPolicy -Scope Process Bypass -Force
 & .\scripts\Run-LKNewsroomCloudflareMigration.ps1
 ```
 
-It rebuilds the SQL from your existing local CSV exports, tests the import in a temporary local SQLite database, checks that 21,191 articles are present, and stops if conversion warnings appear or the estimated D1 size exceeds a 450 MiB safety margin. It preserves your CSVs and deletes the temporary test database after validation.
+The dry run rebuilds SQL from the saved local CSV exports, validates it in a temporary SQLite database, checks that exactly 21,191 articles are present, and stops if conversion warnings appear or the estimated D1 database exceeds a 450 MiB safety margin. In the validated run on 18 Oct 2026 it found 21,191 articles, zero conversion warnings, and an estimated 315.11 MiB database. The SQL file was about 286 MB.
 
-If the report/counts and estimated size look correct, run the same script with the explicit apply switch:
+**Important: do not import the whole SQL file as one command on the Free plan.** Cloudflare D1 Free has a 500 MB per-database size limit and a 100,000 rows-written-per-day account limit. This import contains over 370,000 row inserts before counting chunked article-content updates. The runner therefore splits the SQL into small statements-aware batches, uses a conservative 60,000-write-statement daily budget, saves a local checkpoint after each successful batch, and waits until the next UTC day before continuing. [Current D1 limits](https://developers.cloudflare.com/d1/platform/limits/) · [D1 Free daily limit enforcement](https://developers.cloudflare.com/changelog/post/2026-09-01-d1-free-tier-limit-enforcement/).
+
+To begin the actual migration, run:
 
 ```powershell
 & .\scripts\Run-LKNewsroomCloudflareMigration.ps1 -Apply
 ```
 
-It asks you to type `MIGRATE`, signs in to Cloudflare if needed, creates or finds `lk-newsroom-db`, imports only into an empty D1 database, checks key row counts, builds the static assets, and deploys a **workers.dev preview**. If a previous run fully imported D1 but failed at deployment, the runner verifies existing counts and can resume to the deploy step. If it detects a partial or mismatched database, it stops without deleting or overwriting tables. The runner never switches DNS.
+It asks you to type `MIGRATE`, signs into Cloudflare if necessary, creates or finds `lk-newsroom-db`, initializes the schema, imports verified SQL batches, checks row counts, builds the static assets, and deploys a **workers.dev preview** only after the full import validates. It never switches DNS or deletes Supabase data/local CSVs.
 
-This is an active-news/database recovery step, not yet a guarantee that every legacy feature or image is recovered. CSVs include Storage metadata, not binary image/video files. Since the old Supabase project is restricted, some existing Supabase-hosted images may remain unavailable until the binaries are recovered or images are re-cached from their original licensed/public sources. Keep the Supabase project and every local backup unchanged.
+Keep the laptop powered and connected to the internet while it runs. The script checkpoints every successful batch; if Windows restarts or the terminal closes, reopen PowerShell in the same clone folder and rerun the same command with `-Apply`. It will resume from the saved checkpoint, provided you keep the local backup and migration files unchanged. Do not delete `cloudflare-d1-migration-progress.json` or the `cloudflare-d1-batches-*` directory while a migration is in progress.
 
-## 2. Create the D1 database once
+This is a database/news recovery step, not yet a guarantee that every legacy feature or image is recovered. The CSV export contains Storage metadata, not actual image/video binaries. Since Supabase is restricted, existing Supabase-hosted images may remain unavailable until the files are copied to R2 and URL mappings verified. Keep the Supabase project and every local backup unchanged.
+## 2. D1 database setup
 
-Use the Cloudflare account that already owns the `lk-newsroom-media` R2 bucket:
+For this project, use the one-command runner in the previous section. It creates/finds `lk-newsroom-db`, updates the local Worker binding, initializes the schema, imports quota-safe batches, verifies counts, and deploys the preview.
 
-```powershell
-npx wrangler login
-npx wrangler d1 create lk-newsroom-db
-```
-
-Copy the returned D1 database ID into the `d1_databases` item in `wrangler.jsonc` as `"database_id": "YOUR_REAL_ID"`. Keep binding name `DB` and database name `lk-newsroom-db`. Do not put account secrets in this file.
-
-Then initialize and import:
-
-```powershell
-npx wrangler d1 execute lk-newsroom-db --remote --file=cloudflare/schema.sql
-npx wrangler d1 execute lk-newsroom-db --remote --file=cloudflare/schema-operations.sql
-npx wrangler d1 execute lk-newsroom-db --remote --file="$env:USERPROFILE\Desktop\LK-Newsroom-Complete-Backup\cloudflare-d1-core-import.sql"
-```
-
-These two schema files are for a **new, empty D1 database**; do not rerun the `ALTER TABLE` schema file against an already initialized database. If the import exceeds the Free plan limit or fails, stop and keep all backups and the database intact. Do not change DNS or delete rows to force it through.
+**Do not run the old manual full-file import command below.** It would bypass the daily-quota checkpoints and could leave an incomplete import. If you need to inspect the database manually, use read-only commands such as `npx wrangler d1 info lk-newsroom-db --json` or a `SELECT COUNT(*)` query. Keep account secrets out of `wrangler.jsonc`. Do not change DNS or delete rows to force it through.
 
 Verify key counts:
 

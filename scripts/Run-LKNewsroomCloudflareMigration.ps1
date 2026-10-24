@@ -12,7 +12,11 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Builder = Join-Path $RepoRoot 'scripts\buildCloudflareImport.py'
 $SchemaFile = Join-Path $RepoRoot 'cloudflare\schema.sql'
 $OperationsSchemaFile = Join-Path $RepoRoot 'cloudflare\schema-operations.sql'
+$Splitter = Join-Path $RepoRoot 'scripts\splitCloudflareD1Import.py'
 $WranglerConfig = Join-Path $RepoRoot 'wrangler.jsonc'
+$ProgressPath = Join-Path $BackupPath 'cloudflare-d1-migration-progress.json'
+$ImportBatchSize = 5000
+$DailyRowWriteBudget = 60000
 
 function Write-Step([string]$Message) {
     Write-Host ''
@@ -29,19 +33,39 @@ function Get-NpxPath {
 
 $script:NpxPath = Get-NpxPath
 
-function Invoke-NpxCapture([string[]]$NpxArguments) {
-    $output = & $script:NpxPath @NpxArguments 2>&1 | Out-String
-    $code = $LASTEXITCODE
-    if ($code -ne 0) {
+function Invoke-NpxCapture([string[]]$NpxArguments, [switch]$AllowNonZero) {
+    # Native npm/npx commands can emit harmless cleanup warnings on stderr.
+    # With ErrorActionPreference=Stop, PowerShell may otherwise terminate before
+    # the native exit code can be examined.
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $script:NpxPath @NpxArguments 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        $script:LastNpxExitCode = $code
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($code -ne 0 -and -not $AllowNonZero) {
         throw ("Command failed (exit " + $code + "): npx " + ($NpxArguments -join ' ') + [Environment]::NewLine + $output)
     }
     return $output
 }
 
 function Invoke-NpxLive([string[]]$NpxArguments) {
-    & $script:NpxPath @NpxArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw ("Command failed (exit " + $LASTEXITCODE + "): npx " + ($NpxArguments -join ' '))
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $script:NpxPath @NpxArguments
+        $code = $LASTEXITCODE
+        $script:LastNpxExitCode = $code
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($code -ne 0) {
+        throw ("Command failed (exit " + $code + "): npx " + ($NpxArguments -join ' '))
     }
 }
 
@@ -49,7 +73,7 @@ function ConvertFrom-ToolJson([string]$Output) {
     $arrayStart = $Output.IndexOf('[')
     $objectStart = $Output.IndexOf('{')
     $starts = @($arrayStart, $objectStart) | Where-Object { $_ -ge 0 } | Sort-Object
-    if (-not $starts) { throw ('Could not find JSON in tool output: ' + $Output) }
+    if ($starts.Count -eq 0) { throw ('Could not find JSON in tool output: ' + $Output) }
     $start = [int]$starts[0]
     $open = $Output[$start]
     $end = if ($open -eq '[') { $Output.LastIndexOf(']') } else { $Output.LastIndexOf('}') }
@@ -95,6 +119,27 @@ function Invoke-D1Query([string]$Sql) {
     throw ('Cloudflare returned no SQL result rows. Output: ' + $raw)
 }
 
+function Save-MigrationProgress($Progress) {
+    $json = ConvertTo-Json -InputObject $Progress -Depth 20
+    $tmp = $ProgressPath + '.tmp'
+    [System.IO.File]::WriteAllText($tmp, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tmp -Destination $ProgressPath -Force
+}
+
+function Wait-ForNextUtcDay {
+    $resumeAt = [DateTime]::UtcNow.Date.AddDays(1).AddMinutes(5)
+    Write-Host ''
+    Write-Host 'The safe daily import budget has been used. Progress is saved locally.' -ForegroundColor Yellow
+    Write-Host ('Next batch will resume automatically at ' + $resumeAt.ToString('yyyy-MM-dd HH:mm') + ' UTC.') -ForegroundColor Yellow
+    Write-Host 'Keep this PowerShell process and the internet connection running. If Windows restarts, rerun the same command with -Apply; it will resume from the saved checkpoint.' -ForegroundColor Yellow
+    while ([DateTime]::UtcNow -lt $resumeAt) {
+        $remaining = $resumeAt - [DateTime]::UtcNow
+        Write-Host ('Resuming in approximately ' + [int][Math]::Ceiling($remaining.TotalHours) + ' hour(s).')
+        $sleepSeconds = [Math]::Min(300, [Math]::Max(15, [int]$remaining.TotalSeconds))
+        Start-Sleep -Seconds $sleepSeconds
+    }
+}
+
 function Invoke-PythonPreflight([string]$SqlPath, [string]$ReportPath) {
     $python = Get-Command 'py' -ErrorAction SilentlyContinue
     $pythonMode = @('-3')
@@ -106,18 +151,65 @@ function Invoke-PythonPreflight([string]$SqlPath, [string]$ReportPath) {
 
     $helperPath = Join-Path $env:TEMP ('lk-newsroom-d1-preflight-' + [guid]::NewGuid().ToString('N') + '.py')
     $helper = @'
-import json, shutil, sqlite3, sys, tempfile
+import json, re, shutil, sqlite3, sys, tempfile
 from pathlib import Path
 
 schema_path, operations_path, import_path = map(Path, sys.argv[1:4])
 work = Path(tempfile.mkdtemp(prefix="lk-newsroom-d1-preflight-"))
 db_path = work / "preflight.sqlite"
+index_pattern = re.compile(r"(?im)^[ \t]*CREATE\s+(?:UNIQUE\s+)?INDEX(?:\s+IF\s+NOT\s+EXISTS)?\s+[^;]+;")
 try:
+    print("Starting fast local SQLite preflight; no Cloudflare writes are involved.", flush=True)
     conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=OFF")
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA cache_size=-32768")
+    conn.execute("PRAGMA mmap_size=268435456")
     conn.execute("PRAGMA foreign_keys=OFF")
-    conn.executescript(schema_path.read_text(encoding="utf-8-sig"))
-    conn.executescript(operations_path.read_text(encoding="utf-8-sig"))
-    conn.executescript(import_path.read_text(encoding="utf-8-sig"))
+
+    indexes = []
+    for schema_file in (schema_path, operations_path):
+        sql = schema_file.read_text(encoding="utf-8-sig")
+        indexes.extend(index_pattern.findall(sql))
+        sql = index_pattern.sub("", sql)
+        conn.executescript(sql)
+    print("Schemas loaded. Importing SQL in batches with progress messages...", flush=True)
+
+    statements = 0
+    bytes_read = 0
+    conn.execute("BEGIN")
+    try:
+        pending = []
+        with import_path.open("r", encoding="utf-8-sig", newline="") as sql_file:
+            for line in sql_file:
+                if not pending and (not line.strip() or line.lstrip().startswith("--")):
+                    continue
+                pending.append(line)
+                bytes_read += len(line.encode("utf-8"))
+                statement = "".join(pending)
+                if sqlite3.complete_statement(statement):
+                    sql = statement.strip()
+                    if sql and not sql.startswith("--"):
+                        conn.execute(sql)
+                        statements += 1
+                        if statements % 10000 == 0:
+                            print(f"Validated {statements:,} SQL statements ({bytes_read / (1024 * 1024):.1f} MiB read)...", flush=True)
+                    pending.clear()
+        if pending:
+            tail = "".join(pending).strip()
+            if tail and not tail.startswith("--"):
+                raise RuntimeError("The import SQL ended with an incomplete SQL statement.")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    print(f"Imported {statements:,} SQL statements. Rebuilding {len(indexes)} indexes...", flush=True)
+    for number, statement in enumerate(indexes, start=1):
+        conn.execute(statement)
+        print(f"Index {number}/{len(indexes)} ready.", flush=True)
+
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     counts = {}
     for table in ("articles", "article_tags", "social_graphics", "social_posts", "live_updates", "tags"):
@@ -127,8 +219,8 @@ try:
     page_size = conn.execute("PRAGMA page_size").fetchone()[0]
     size_bytes = int(page_count * page_size)
     conn.close()
-    payload = {"counts": counts, "estimated_sqlite_bytes": size_bytes, "estimated_sqlite_mib": round(size_bytes / (1024 * 1024), 2)}
-    print(json.dumps(payload))
+    payload = {"counts": counts, "estimated_sqlite_bytes": size_bytes, "estimated_sqlite_mib": round(size_bytes / (1024 * 1024), 2), "validated_sql_statements": statements}
+    print(json.dumps(payload), flush=True)
     if counts.get("articles") != 21191:
         print("STOP: expected exactly 21,191 imported articles.", file=sys.stderr)
         sys.exit(3)
@@ -139,12 +231,17 @@ except Exception as exc:
     print("Local SQLite preflight failed: " + str(exc), file=sys.stderr)
     sys.exit(2)
 finally:
+    try:
+        conn.close()
+    except Exception:
+        pass
     shutil.rmtree(work, ignore_errors=True)
 '@
     [System.IO.File]::WriteAllText($helperPath, $helper, [System.Text.UTF8Encoding]::new($false))
     try {
-        $raw = & $python.Source @pythonMode $helperPath $SchemaFile $OperationsSchemaFile $SqlPath 2>&1 | Out-String
+        $null = & $python.Source @pythonMode $helperPath $SchemaFile $OperationsSchemaFile $SqlPath 2>&1 | Tee-Object -Variable rawLines
         $code = $LASTEXITCODE
+        $raw = @($rawLines) -join [Environment]::NewLine
         if ($code -ne 0) { throw ('Local import preflight failed. No remote database changes were made.' + [Environment]::NewLine + $raw) }
         $parsed = ConvertFrom-ToolJson $raw
         $script:PreflightCounts = $parsed.counts
@@ -168,44 +265,89 @@ Write-Host ('Backup folder: ' + $BackupPath)
 if (-not (Test-Path -LiteralPath $BackupPath -PathType Container)) {
     throw "Backup folder not found: $BackupPath. Keep the folder name LK-Newsroom-Complete-Backup and rerun with -BackupPath if needed."
 }
-foreach ($required in @($Builder, $SchemaFile, $OperationsSchemaFile, $WranglerConfig)) {
+foreach ($required in @($Builder, $Splitter, $SchemaFile, $OperationsSchemaFile, $WranglerConfig)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required repository file is missing: $required" }
 }
 
-Write-Step '1/5 Prepare the D1 import from your saved CSV files'
-$pythonCommand = Get-Command 'py' -ErrorAction SilentlyContinue
-if ($pythonCommand) {
-    & $pythonCommand.Source -3 $Builder $BackupPath
-} else {
-    $pythonCommand = Get-Command 'python' -ErrorAction SilentlyContinue
-    if (-not $pythonCommand) { throw 'Python 3 was not found. Install Python 3 and try again.' }
-    & $pythonCommand.Source $Builder $BackupPath
-}
-if ($LASTEXITCODE -ne 0) { throw 'CSV-to-D1 conversion failed. No Cloudflare database changes were made.' }
-
 $SqlPath = Join-Path $BackupPath 'cloudflare-d1-core-import.sql'
 $ReportPath = Join-Path $BackupPath 'cloudflare-d1-import-report.txt'
-if (-not (Test-Path -LiteralPath $SqlPath -PathType Leaf)) { throw "Generated SQL was not found: $SqlPath" }
-if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { throw "Import report was not found: $ReportPath" }
+$reuseValidatedSql = $false
 
-$report = Get-Content -LiteralPath $ReportPath -Raw
-$warningMatch = [regex]::Match($report, '(?s)Warnings:\s*(.*?)(?:\r?\nIMPORTANT:|$)')
-if ($warningMatch.Success) {
-    $warningText = $warningMatch.Groups[1].Value.Trim()
-    if ($warningText -and $warningText -ne 'No row conversion warnings detected.') {
-        Write-Host $warningText -ForegroundColor Yellow
-        throw 'The converter reported row warnings. Review cloudflare-d1-import-report.txt before any remote import. Nothing in Cloudflare was changed.'
+# Reuse a saved SQL file only when its hash exactly matches the checkpoint that
+# was made after successful validation.
+if ((Test-Path -LiteralPath $ProgressPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $SqlPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $ReportPath -PathType Leaf)) {
+    try {
+        $savedProgressForReuse = Get-Content -LiteralPath $ProgressPath -Raw | ConvertFrom-Json
+        $existingSqlHash = (Get-FileHash -LiteralPath $SqlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $existingReport = Get-Content -LiteralPath $ReportPath -Raw
+        $existingWarnings = [regex]::Match($existingReport, '(?s)Warnings:\s*(.*?)(?:\r?\nIMPORTANT:|$)')
+        if ($savedProgressForReuse.SourceSqlSha256 -eq $existingSqlHash -and
+            $existingWarnings.Success -and
+            (-not $existingWarnings.Groups[1].Value.Trim() -or
+             $existingWarnings.Groups[1].Value.Trim() -eq 'No row conversion warnings detected.')) {
+            $reuseValidatedSql = $true
+            $rowsSection = [regex]::Match($existingReport, '(?s)Rows written to SQL by table:\s*(.*?)(?:\r?\nSkipped/archive-only tables:|$)')
+            if ($rowsSection.Success) {
+                $expectedCounts = @{}
+                foreach ($line in ($rowsSection.Groups[1].Value -split '\r?\n')) {
+                    $parts = $line.Split([char]9)
+                    if ($parts.Count -ge 2 -and $parts[0].Trim() -and $parts[1].Trim() -match '^\d+$') {
+                        $expectedCounts[$parts[0].Trim()] = [int64]$parts[1].Trim()
+                    }
+                }
+                $script:PreflightCounts = [pscustomobject]$expectedCounts
+            }
+        }
+    } catch {
+        $reuseValidatedSql = $false
     }
 }
 
-$sqlInfo = Get-Item -LiteralPath $SqlPath
-Write-Host ('Import file: ' + $SqlPath)
-Write-Host ('Import SQL size: ' + $sqlInfo.Length.ToString('N0') + ' bytes')
-Write-Host ('Report: ' + $ReportPath)
+if ($reuseValidatedSql) {
+    Write-Step '1/5 Reuse previously validated SQL matching the saved checkpoint'
+    Write-Host 'The SQL hash matches the saved checkpoint. Skipping CSV conversion and the full local SQLite preflight.'
+    Write-Host ('Import file: ' + $SqlPath)
+    Write-Host ('Import SQL size: ' + (Get-Item -LiteralPath $SqlPath).Length.ToString('N0') + ' bytes')
+    Write-Host ('Report: ' + $ReportPath)
+} else {
+    Write-Step '1/5 Prepare the D1 import from your saved CSV files'
+    $pythonCommand = Get-Command 'py' -ErrorAction SilentlyContinue
+    if ($pythonCommand) {
+        & $pythonCommand.Source -3 $Builder $BackupPath
+    } else {
+        $pythonCommand = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $pythonCommand) { throw 'Python 3 was not found. Install Python 3 and try again.' }
+        & $pythonCommand.Source $Builder $BackupPath
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'CSV-to-D1 conversion failed. No Cloudflare database changes were made.' }
+
+    if (-not (Test-Path -LiteralPath $SqlPath -PathType Leaf)) { throw "Generated SQL was not found: $SqlPath" }
+    if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { throw "Import report was not found: $ReportPath" }
+
+    $report = Get-Content -LiteralPath $ReportPath -Raw
+    $warningMatch = [regex]::Match($report, '(?s)Warnings:\s*(.*?)(?:\r?\nIMPORTANT:|$)')
+    if ($warningMatch.Success) {
+        $warningText = $warningMatch.Groups[1].Value.Trim()
+        if ($warningText -and $warningText -ne 'No row conversion warnings detected.') {
+            Write-Host $warningText -ForegroundColor Yellow
+            throw 'The converter reported row warnings. Review cloudflare-d1-import-report.txt before any remote import. Nothing in Cloudflare was changed.'
+        }
+    }
+
+    $sqlInfo = Get-Item -LiteralPath $SqlPath
+    Write-Host ('Import file: ' + $SqlPath)
+    Write-Host ('Import SQL size: ' + $sqlInfo.Length.ToString('N0') + ' bytes')
+    Write-Host ('Report: ' + $ReportPath)
+}
 
 Write-Step '2/5 Validate the complete import locally before uploading'
-Invoke-PythonPreflight $SqlPath $ReportPath
-
+if ($reuseValidatedSql) {
+    Write-Host 'Previous successful local validation is being reused because the SQL hash exactly matches the saved remote checkpoint.' -ForegroundColor Green
+} else {
+    Invoke-PythonPreflight $SqlPath $ReportPath
+}
 if (-not $Apply) {
     Write-Host ''
     Write-Host 'DRY RUN COMPLETE. No login, Cloudflare database creation, upload, deployment, or DNS changes were performed.' -ForegroundColor Green
@@ -219,7 +361,89 @@ Write-Host 'It does not switch the production domain or delete Supabase/local ba
 $confirmation = Read-Host 'Type MIGRATE to continue'
 if ($confirmation -cne 'MIGRATE') { throw 'Cancelled by user. No remote changes were made.' }
 
-Write-Step '3/5 Install dependencies and prepare the preview build before remote changes'
+Write-Step '3/6 Prepare resumable SQL batches before touching Cloudflare'
+$sourceHash = (Get-FileHash -LiteralPath $SqlPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$progress = $null
+$batchDirectory = $null
+if (Test-Path -LiteralPath $ProgressPath -PathType Leaf) {
+    $progress = Get-Content -LiteralPath $ProgressPath -Raw | ConvertFrom-Json
+    if ($progress.SourceSqlSha256 -ne $sourceHash) {
+        throw 'The generated SQL changed after a migration checkpoint was saved. To protect the existing D1 data, the runner stopped. Do not delete the checkpoint or rerun with a different import file.'
+    }
+    $batchDirectory = [string]$progress.BatchDirectory
+    if (-not (Test-Path -LiteralPath (Join-Path $batchDirectory 'manifest.json') -PathType Leaf)) {
+        throw "The saved batch manifest is missing from $batchDirectory. No remote changes were made."
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $batchDirectory 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.source_sha256 -ne $sourceHash) { throw 'The batch manifest does not match the currently validated import SQL.' }
+    Write-Host ('Resuming saved D1 migration at batch ' + $progress.NextBatch + ' of ' + $progress.TotalBatches + '.') -ForegroundColor Green
+} else {
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
+    $batchDirectory = Join-Path $BackupPath ('cloudflare-d1-batches-' + $stamp)
+    $pythonLauncher = Get-Command 'py' -ErrorAction SilentlyContinue
+    if ($pythonLauncher) {
+        $splitOutput = & $pythonLauncher.Source -3 $Splitter $SqlPath $batchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    } else {
+        $pythonLauncher = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) { throw 'Python 3 was not found. No Cloudflare changes were made.' }
+        $splitOutput = & $pythonLauncher.Source $Splitter $SqlPath $batchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    }
+    $splitExitCode = $LASTEXITCODE
+    if ($splitExitCode -ne 0) { throw ('Could not split SQL safely. No Cloudflare changes were made.' + [Environment]::NewLine + $splitOutput) }
+    $manifest = Get-Content -LiteralPath (Join-Path $batchDirectory 'manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.source_sha256 -ne $sourceHash) { throw 'Generated batch manifest does not match the validated SQL file.' }
+    Write-Host ('Prepared ' + $manifest.batch_count + ' SQL batches, up to ' + $ImportBatchSize + ' statements each.') -ForegroundColor Green
+    Write-Host ('Batch files are saved under: ' + $batchDirectory)
+}
+# If a previous runner used 30,000-statement batches, rebuild the same SQL into
+# smaller batches and resume from the exact count already checkpointed.
+if ($progress -and [int]$manifest.batch_size -ne $ImportBatchSize) {
+    $completedStatements = [int64]$progress.StatementsCompleted
+    if (($completedStatements % $ImportBatchSize) -ne 0) {
+        throw "The saved checkpoint at $completedStatements statements is not aligned with the new $ImportBatchSize-statement batch size. No remote changes were made."
+    }
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
+    $newBatchDirectory = Join-Path $BackupPath ('cloudflare-d1-batches-' + $stamp)
+    $pythonLauncher = Get-Command 'py' -ErrorAction SilentlyContinue
+    if ($pythonLauncher) {
+        $splitOutput = & $pythonLauncher.Source -3 $Splitter $SqlPath $newBatchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    } else {
+        $pythonLauncher = Get-Command 'python' -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) { throw 'Python 3 was not found. No Cloudflare changes were made.' }
+        $splitOutput = & $pythonLauncher.Source $Splitter $SqlPath $newBatchDirectory --batch-size $ImportBatchSize 2>&1 | Out-String
+    }
+    $splitExitCode = $LASTEXITCODE
+    if ($splitExitCode -ne 0) { throw ('Could not re-batch saved SQL safely.' + [Environment]::NewLine + $splitOutput) }
+    $newManifest = Get-Content -LiteralPath (Join-Path $newBatchDirectory 'manifest.json') -Raw | ConvertFrom-Json
+    if ($newManifest.source_sha256 -ne $sourceHash -or [int64]$newManifest.total_statements -ne [int64]$manifest.total_statements) {
+        throw 'Re-batched SQL manifest does not match the validated source or saved statement total.'
+    }
+    $progress.BatchDirectory = $newBatchDirectory
+    $progress.BatchSize = $ImportBatchSize
+    $progress.TotalBatches = [int]$newManifest.batch_count
+    $progress.NextBatch = [int][Math]::Floor($completedStatements / $ImportBatchSize) + 1
+    if (-not $progress.PSObject.Properties['RowsWrittenToday']) {
+        # The previous runner tracked statements rather than affected rows.
+        # Conservatively treat today's allowance as consumed because the last
+        # recorded command reported 153,676 rows written. The loop will wait
+        # for midnight UTC before sending another D1 write request.
+        $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue $DailyRowWriteBudget -Force
+    }
+    if (-not $progress.PSObject.Properties['RowsPerStatementEstimate']) {
+        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.3 -Force
+    }
+    Save-MigrationProgress $progress
+    $batchDirectory = $newBatchDirectory
+    $manifest = $newManifest
+    Write-Host ('Re-batched the remaining import into ' + $manifest.batch_count + ' smaller 5,000-statement batches, resuming at batch ' + $progress.NextBatch + '.') -ForegroundColor Green
+}
+$batchFiles = @($manifest.batches)
+if ($batchFiles.Count -ne [int]$manifest.batch_count -or $batchFiles.Count -eq 0) {
+    throw 'Batch manifest is incomplete. No Cloudflare changes were made.'
+}
+Write-Host ('Conservative daily budget: ' + $DailyRowWriteBudget.ToString('N0') + ' actual rows written, below the 100,000/day Free limit.')
+
+Write-Step '4/6 Install dependencies and prepare the preview build before remote changes'
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'node_modules'))) {
     $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
     if (-not $npmCommand) { $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue }
@@ -232,15 +456,14 @@ if (-not $nodeCommand) { throw 'Node.js was not found. No Cloudflare changes wer
 & $nodeCommand.Source 'scripts/buildCloudflareAssets.mjs'
 if ($LASTEXITCODE -ne 0) { throw 'The Cloudflare asset build failed. No Cloudflare changes were made.' }
 
-Write-Step '4/5 Sign in to Cloudflare and prepare D1'
-$whoOutput = & $script:NpxPath wrangler whoami 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
+Write-Step '5/6 Sign in to Cloudflare and prepare D1'
+$whoOutput = Invoke-NpxCapture @('wrangler', 'whoami') -AllowNonZero
+if ($script:LastNpxExitCode -ne 0 -or $whoOutput -match '(?i)(not authenticated|not logged in|please run.*login|login required)') {
     Write-Host 'Complete the Cloudflare sign-in that opens in your browser.' -ForegroundColor Yellow
     Invoke-NpxLive @('wrangler', 'login')
-    Invoke-NpxCapture @('wrangler', 'whoami') | Out-Null
-} else {
-    Write-Host $whoOutput.Trim()
+    $whoOutput = Invoke-NpxCapture @('wrangler', 'whoami')
 }
+Write-Host $whoOutput.Trim()
 
 $dbs = Get-D1List
 $db = @($dbs | Where-Object { $_.name -eq $DatabaseName -or $_.database_name -eq $DatabaseName } | Select-Object -First 1)
@@ -259,20 +482,151 @@ Write-Host ('D1 database found: ' + $DatabaseName + ' (' + $databaseId + ')') -F
 $tableResult = Invoke-D1Query "SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%';"
 $tableCount = [int]$tableResult.table_count
 
-Write-Step '5/5 Import or resume the D1 migration, then deploy the preview'
-if ($tableCount -eq 0) {
-    Write-Host 'D1 is empty. Initializing schema and importing the verified CSV export.'
-    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
-    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $OperationsSchemaFile, '--yes')
-    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SqlPath, '--yes')
+if ($progress) {
+    if ($progress.DatabaseId -ne $databaseId) {
+        throw 'The saved migration checkpoint belongs to a different D1 database. No data was modified.'
+    }
+    if ([int]$progress.TotalBatches -ne [int]$manifest.batch_count) {
+        throw 'The saved checkpoint batch count differs from the current SQL manifest. No data was modified.'
+    }
 } else {
-    Write-Host "D1 already has $tableCount tables. Checking whether this is a completed prior import; no existing tables will be dropped."
+    if ($tableCount -gt 0) {
+        throw "D1 already contains $tableCount tables, but there is no migration checkpoint. To protect existing data, the runner will not overwrite or resume it automatically."
+    }
+    $progress = [pscustomobject]@{
+        DatabaseId = $databaseId
+        BatchDirectory = $batchDirectory
+        SourceSqlSha256 = $sourceHash
+        BatchSize = $ImportBatchSize
+        TotalBatches = [int]$manifest.batch_count
+        NextBatch = 1
+        StatementsCompleted = 0
+        UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+        StatementsWrittenToday = 0
+        MainSchemaReady = $false
+        OperationsSchemaReady = $false
+        ImportComplete = $false
+    }
+    Save-MigrationProgress $progress
+}
+
+Write-Step '6/6 Initialize D1, import in quota-safe batches, verify, and deploy preview'
+if (-not $progress.MainSchemaReady) {
+    Write-Host 'Applying the base D1 schema...'
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $SchemaFile, '--yes')
+    $progress.MainSchemaReady = $true
+    Save-MigrationProgress $progress
+}
+if (-not $progress.OperationsSchemaReady) {
+    Write-Host 'Applying the newsroom operations schema...'
+    Invoke-NpxLive @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $OperationsSchemaFile, '--yes')
+    $progress.OperationsSchemaReady = $true
+    Save-MigrationProgress $progress
+}
+
+while ([int]$progress.NextBatch -le [int]$progress.TotalBatches) {
+    $utcToday = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    if ($progress.UtcDate -ne $utcToday) {
+        $progress.UtcDate = $utcToday
+        if ($progress.PSObject.Properties['RowsWrittenToday']) {
+            $progress.RowsWrittenToday = 0
+        } else {
+            $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue 0 -Force
+        }
+        $progress.StatementsWrittenToday = 0
+        Save-MigrationProgress $progress
+    }
+    if (-not $progress.PSObject.Properties['RowsWrittenToday']) {
+        $progress | Add-Member -NotePropertyName RowsWrittenToday -NotePropertyValue $DailyRowWriteBudget -Force
+        Save-MigrationProgress $progress
+    }
+    if (-not $progress.PSObject.Properties['RowsPerStatementEstimate']) {
+        $progress | Add-Member -NotePropertyName RowsPerStatementEstimate -NotePropertyValue 5.3 -Force
+        Save-MigrationProgress $progress
+    }
+
+    $batchNumber = [int]$progress.NextBatch
+    $batchInfo = $batchFiles[$batchNumber - 1]
+    $batchStatements = [int]$batchInfo.statements
+    $estimatedRowsThisBatch = [int64][Math]::Ceiling($batchStatements * [double]$progress.RowsPerStatementEstimate * 1.1)
+
+    if ([int64]$progress.RowsWrittenToday + $estimatedRowsThisBatch -gt $DailyRowWriteBudget) {
+        Wait-ForNextUtcDay
+        $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+        $progress.RowsWrittenToday = 0
+        $progress.StatementsWrittenToday = 0
+        Save-MigrationProgress $progress
+        continue
+    }
+
+    $batchUtcDay = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    $batchPath = Join-Path $batchDirectory ([string]$batchInfo.file)
+    if (-not (Test-Path -LiteralPath $batchPath -PathType Leaf)) {
+        throw "Batch $batchNumber is missing: $batchPath. The saved checkpoint remains unchanged."
+    }
+
+    Write-Host ''
+    Write-Host ("Importing batch " + $batchNumber + "/" + $progress.TotalBatches +
+        " (" + $batchStatements.ToString('N0') + " statements; estimated " +
+        $estimatedRowsThisBatch.ToString('N0') + " rows written; " +
+        ([int64]$progress.RowsWrittenToday).ToString('N0') + "/" +
+        $DailyRowWriteBudget.ToString('N0') + " row-write budget used today)...") -ForegroundColor Cyan
+
+    # Wrangler writes its normal D1-availability warning to stderr. Under
+    # PowerShell with ErrorActionPreference=Stop, a native stderr line can be
+    # raised as NativeCommandError before the exit code is read. Capture output
+    # safely and inspect the real native exit code instead.
+    $batchOutput = Invoke-NpxCapture @('wrangler', 'd1', 'execute', $DatabaseName, '--remote', '--file', $batchPath, '--yes', '--json') -AllowNonZero
+    $batchExitCode = $script:LastNpxExitCode
+    if ($batchExitCode -ne 0) {
+        Write-Host $batchOutput -ForegroundColor Yellow
+        if ($batchOutput -match '(?i)(daily.*row.write.limit|row.write.limit|exceeded.*free.tier.*row.write|free.tier.daily.row.write)') {
+            Write-Host 'Cloudflare reached the daily free-tier write limit earlier than expected. The current batch remains checkpointed for a safe retry.' -ForegroundColor Yellow
+            Wait-ForNextUtcDay
+            $progress.UtcDate = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+            $progress.StatementsWrittenToday = 0
+            Save-MigrationProgress $progress
+            continue
+        }
+        throw "D1 batch $batchNumber failed. The checkpoint was not advanced. Fix the reported issue, then rerun this script with -Apply to retry the current batch."
+    }
+
+    Write-Host $batchOutput
+    $completedUtcDay = [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    # Parse Wrangler's actual rows_written metric. If output format changes, consume
+    # today's budget conservatively rather than issuing another potentially unsafe write.
+    $rowsWrittenMatch = [regex]::Match($batchOutput, '(?i)["'']?(?:Rows written|rows_written)["'']?\s*[:=]\s*["'']?([\d,]+)')
+    if (-not $rowsWrittenMatch.Success) {
+        $rowsWrittenMatch = [regex]::Match($batchOutput, '(?i)\b([\d,]+)\s+rows written\b')
+    }
+    if ($rowsWrittenMatch.Success) {
+        $actualRowsWritten = [int64](($rowsWrittenMatch.Groups[1].Value) -replace ',', '')
+        $rowsPerStatement = [double]$actualRowsWritten / [Math]::Max(1, $batchStatements)
+        # Keep a conservative rolling estimate; never reduce it during the migration.
+        $progress.RowsPerStatementEstimate = [Math]::Max([double]$progress.RowsPerStatementEstimate, $rowsPerStatement)
+        if ($completedUtcDay -ne $batchUtcDay) {
+            $progress.RowsWrittenToday = $actualRowsWritten
+        } else {
+            $progress.RowsWrittenToday = [int64]$progress.RowsWrittenToday + $actualRowsWritten
+        }
+    } else {
+        Write-Host 'Could not safely read rows_written from Wrangler output; pausing further writes until the next UTC day.' -ForegroundColor Yellow
+        $progress.RowsWrittenToday = $DailyRowWriteBudget
+    }
+    $progress.StatementsCompleted = [int64]$progress.StatementsCompleted + $batchStatements
+    $progress.StatementsWrittenToday = [int64]$progress.StatementsWrittenToday + $batchStatements
+    $progress.NextBatch = $batchNumber + 1
+    $progress.UtcDate = $completedUtcDay
+    Save-MigrationProgress $progress
+    Write-Host ("Checkpoint saved. Completed " + $progress.StatementsCompleted.ToString('N0') +
+        " of " + $manifest.total_statements.ToString('N0') + " import statements; rows written today: " +
+        ([int64]$progress.RowsWrittenToday).ToString('N0') + ".") -ForegroundColor Green
 }
 
 $countResult = Invoke-D1Query "SELECT (SELECT COUNT(*) FROM articles) AS articles, (SELECT COUNT(*) FROM social_graphics) AS social_graphics, (SELECT COUNT(*) FROM article_tags) AS article_tags, (SELECT COUNT(*) FROM social_posts) AS social_posts;"
 Write-Host ('Verified D1 counts: ' + ($countResult | ConvertTo-Json -Compress)) -ForegroundColor Green
 if ([int]$countResult.articles -ne 21191) {
-    throw 'Remote D1 does not contain exactly 21,191 articles. The runner will not deploy or overwrite this database. Keep all backups and contact me with the error.'
+    throw 'Remote D1 does not contain exactly 21,191 articles. Deployment stopped. Keep the checkpoint and all backups; do not run a second import.'
 }
 foreach ($tableName in @('social_graphics', 'article_tags', 'social_posts')) {
     $expected = $script:PreflightCounts.$tableName
@@ -280,6 +634,8 @@ foreach ($tableName in @('social_graphics', 'article_tags', 'social_posts')) {
         throw "Remote D1 $tableName count differs from the locally validated import. Deployment stopped; no data was deleted."
     }
 }
+$progress.ImportComplete = $true
+Save-MigrationProgress $progress
 
 Invoke-NpxLive @('wrangler', 'deploy')
 
