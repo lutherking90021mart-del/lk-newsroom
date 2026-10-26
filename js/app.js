@@ -14,6 +14,8 @@ const mediaImage=value=>/^https?:\/\//i.test(String(value||''))?value:link(value
 let feed=[];
 let liveVideos=[];
 let videoFeedLoaded=false;
+const NEWS_CACHE_KEY='lk-news-feed-cache-v1';
+let newsLoading=false;
 const categorySlug=value=>String(value||'').trim().toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
 const categoryStories=(items,category)=>category==='Latest'?items:category==='Ghana'?items.filter(article=>article.country==='Ghana'||article.category.toLowerCase()==='ghana'||article.categorySlug==='ghana'):items.filter(article=>article.category.toLowerCase()===category.toLowerCase()||article.categorySlug===categorySlug(category));
 const categoryUrl=name=>link(`category/${categorySlug(name)}`);
@@ -44,10 +46,67 @@ const toUiArticle=row=>({
   image:row.featured_image_url||fallbackImage(),originalUrl:row.original_url||'',tags:row.auto_tags||[],sponsor:row.sponsored_article_details||null,raw:row
 });
 
+function restoreCachedNews(){
+  try{
+    const cached=JSON.parse(localStorage.getItem(NEWS_CACHE_KEY)||'null');
+    if(!Array.isArray(cached?.data)||!cached.data.length)return false;
+    const rows=cached.data.filter(row=>row&&row.title&&(row.id||row.slug));
+    if(!rows.length)return false;
+    feed=rows.map(toUiArticle);
+    return true;
+  }catch{return false;}
+}
+function cacheNewsFeed(rows){
+  if(!Array.isArray(rows)||!rows.length)return;
+  try{
+    const compact=rows.slice(0,80).map(row=>({...row,content_markdown:undefined,content:undefined}));
+    localStorage.setItem(NEWS_CACHE_KEY,JSON.stringify({savedAt:Date.now(),data:compact}));
+  }catch(error){console.warn('Could not cache the latest news feed:',error);}
+}
 async function hydrateNews(){
-  try{const response=await fetch(`${aggregatorApi()}/v1/news?limit=100`);if(response.ok){const payload=await response.json();if(Array.isArray(payload.data)){feed=payload.data.map(toUiArticle);return;}}}catch{}
-  if(!configured)return;
-  try{const rows=await newsApi.published({limit:100});if(rows?.length)feed=rows.map(toUiArticle);}catch(error){console.warn('Using offline LK Newsroom demo data:',error.message);}
+  newsLoading=true;
+  try{
+    // The homepage no longer waits for this request, so do not abort a slow
+    // but valid response: the result can still replace cached stories later.
+    const endpoint=`${aggregatorApi()}/v1/news?limit=100`;
+    let livePayload=null;
+    let lastError=null;
+    for(let attempt=0;attempt<2;attempt++){
+      try{
+        const response=await fetch(endpoint,{
+          cache:'no-store',
+          headers:{accept:'application/json'}
+        });
+        if(!response.ok)throw new Error(`News API returned HTTP ${response.status}`);
+        const payload=await response.json();
+        if(Array.isArray(payload.data)&&payload.data.length){
+          livePayload=payload.data;
+          break;
+        }
+        lastError=new Error('The news API returned an empty feed.');
+      }catch(error){lastError=error;}
+      if(attempt===0)await new Promise(resolve=>setTimeout(resolve,700));
+    }
+    if(livePayload){
+      feed=livePayload.map(toUiArticle);
+      cacheNewsFeed(livePayload);
+      return true;
+    }
+    if(lastError)console.warn('Live news refresh did not return stories; preserving the last available feed.',lastError);
+    // If the public API fails or returns no stories, keep the last good feed.
+    if(configured){
+      try{
+        const rows=await newsApi.published({limit:100});
+        if(rows?.length){
+          feed=rows.map(toUiArticle);
+          cacheNewsFeed(rows);
+          return true;
+        }
+      }catch(error){console.warn('The secondary news feed is temporarily unavailable.',error);}
+    }
+    if(!feed.length)restoreCachedNews();
+    return feed.length>0;
+  }finally{newsLoading=false;}
 }
 const toUiVideo=row=>({id:row.id,title:row.title,description:row.description||'',image:row.thumbnail_url||fallbackImage(),url:row.youtube_url||row.video_url||'',source:row.articles?.news_sources?.name||'LK Newsroom',publishedAt:row.published_at||row.created_at});
 async function hydrateVideos(){try{const response=await fetch(`${aggregatorApi()}/v1/videos?limit=24`);if(!response.ok)return;const payload=await response.json();videoFeedLoaded=true;if(Array.isArray(payload.data))liveVideos=payload.data.map(toUiVideo);}catch{}}
@@ -98,7 +157,11 @@ function initShell(){
   if(window.AOS)AOS.init({once:true,offset:35,duration:520});
 }
 function renderHero(stories=feed.slice(0,3)){
-  const wrapper=$('.hero-swiper .swiper-wrapper');if(!wrapper||!stories.length)return;
+  const wrapper=$('.hero-swiper .swiper-wrapper');if(!wrapper)return;
+  if(!stories.length){
+    wrapper.innerHTML=`<article class="swiper-slide hero-slide hero-slide--empty"><div class="hero-content"><span class="eyebrow">LK NEWSROOM</span><h1>${newsLoading?'Loading the latest stories…':'The news feed is temporarily unavailable'}</h1><p>${newsLoading?'The latest verified stories will appear here shortly.':'Please refresh shortly to try again.'}</p></div></article>`;
+    return;
+  }
   wrapper.innerHTML=stories.map(article=>`<article class="swiper-slide hero-slide" style="background-image:url('${esc(article.image)}')"><div class="hero-content"><h1>${esc(article.title)}</h1><a class="btn btn-primary hero-details-button" href="/news/${encodeURIComponent(article.id)}">Click here for more details <i class="fa-solid fa-arrow-right"></i></a></div></article>`).join('');
 }
 function takeUnused(stories,count,used){const selected=[];for(const story of stories){const key=String(story.id||story.slug||story.title);if(used.has(key))continue;used.add(key);selected.push(story);if(selected.length===count)break;}return selected;}
@@ -111,11 +174,13 @@ function home(){
   const trendingStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),3,used);
   const mostReadStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),4,used);
   const remainingStories=feed.filter(article=>!used.has(String(article.id||article.slug||article.title)));
-  $('#featured-articles').innerHTML=featuredStories.map(article=>articleCard(article)).join('');
-  $('#top-stories').innerHTML=editorStories.map((article,index)=>articleCard(article,index>0)).join('');
-  $('#latest-news').innerHTML=latestStories.map(article=>articleCard(article)).join('');
-  $('#trending-news').innerHTML=trendingStories.map(article=>articleCard(article,true)).join('');
-  const mostRead=$('#most-read')||$('.ranked-list');if(mostRead)mostRead.innerHTML=mostReadStories.map(article=>`<li><a href="/news/${encodeURIComponent(article.id)}">${esc(article.title)}</a></li>`).join('');
+  const feedNotice=`<div class="empty-state newsroom-feed-state"><i class="fa-solid fa-newspaper fa-2x"></i><p>${newsLoading?'Loading the latest stories…':'The live news feed is temporarily unavailable. Please try again shortly.'}</p></div>`;
+  const cards=(stories,compact=false)=>stories.length?stories.map((article,index)=>articleCard(article,compact&&index>0)).join(''):feedNotice;
+  $('#featured-articles').innerHTML=cards(featuredStories);
+  $('#top-stories').innerHTML=cards(editorStories,true);
+  $('#latest-news').innerHTML=cards(latestStories);
+  $('#trending-news').innerHTML=cards(trendingStories,true);
+  const mostRead=$('#most-read')||$('.ranked-list');if(mostRead)mostRead.innerHTML=mostReadStories.length?mostReadStories.map(article=>`<li><a href="/news/${encodeURIComponent(article.id)}">${esc(article.title)}</a></li>`).join(''):`<li class="empty-state newsroom-feed-state">${newsLoading?'Loading the latest stories…':'The news feed is temporarily unavailable.'}</li>`;
   $('#category-tiles').innerHTML=categories.map(([name,icon])=>{const stories=categoryStories(feed,name);const latest=stories[0];const label=stories.length?`${stories.length} live ${stories.length===1?'story':'stories'}`:'Live desk';const detail=latest?.title||'Fresh verified reporting is on the way.';return `<a data-aos="zoom-in" class="category-tile" href="${categoryUrl(name)}"><i class="fa-solid ${icon}"></i><strong>${name}</strong><small>${label}</small><span class="category-tile__headline" title="${esc(detail)}">${esc(detail)}</span></a>`;}).join('');
   document.querySelectorAll('.category-tile').forEach(tile=>tile.addEventListener('click',event=>{if(event.defaultPrevented||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||event.button!==0)return;event.preventDefault();document.documentElement.classList.add('is-page-leaving');window.setTimeout(()=>location.assign(tile.href),160);}));
   $('#videos').innerHTML=liveVideos.length?liveVideos.slice(0,3).map(videoCard).join(''):videoEmptyState();
@@ -130,8 +195,23 @@ function home(){
   }).sort((a,b)=>new Date(b.publishedAt||0)-new Date(a.publishedAt||0)).slice(0,5);
   $('#gallery').innerHTML=galleryStories.length?galleryStories.map((article,index)=>`<a class="gallery-item" href="/news/${encodeURIComponent(article.id)}" aria-label="Read: ${esc(article.title)}"><img src="${esc(article.image)}" alt="${esc(article.title)}" loading="${index<3?'eager':'lazy'}" onerror="this.closest('.gallery-item')?.remove()"><span>${esc(article.title)}</span></a>`).join(''):'<div class="empty-state"><i class="fa-solid fa-camera fa-2x"></i><p>New story photos will appear here as image-backed news is published.</p><a class="btn btn-outline" href="pages/gallery.html">Open photo gallery</a></div>';
   renderNewsletter($('#newsletter'));
-  $('#load-more')?.addEventListener('click',event=>{event.currentTarget.remove();$('#latest-news').insertAdjacentHTML('beforeend',remainingStories.map(article=>articleCard(article)).join(''));if(window.AOS)AOS.refresh();});
-  if(window.Swiper)new Swiper('.hero-swiper',{loop:feed.length>1,speed:750,autoplay:{delay:5000,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true}});
+  const loadMoreButton=$('#load-more');
+  if(loadMoreButton){
+    // home() can run once for cached stories and again for fresh stories; replace
+    // this node so each render has exactly one handler with the latest feed.
+    const freshButton=loadMoreButton.cloneNode(true);
+    loadMoreButton.replaceWith(freshButton);
+    freshButton.addEventListener('click',event=>{
+      event.currentTarget.remove();
+      $('#latest-news').insertAdjacentHTML('beforeend',remainingStories.map(article=>articleCard(article)).join(''));
+      if(window.AOS)AOS.refresh();
+    });
+  }
+  if(window.Swiper){
+    const heroElement=$('.hero-swiper');
+    if(heroElement?.swiper)heroElement.swiper.destroy(true,true);
+    new Swiper('.hero-swiper',{loop:feed.length>1,speed:750,autoplay:{delay:5000,disableOnInteraction:false},pagination:{el:'.swiper-pagination',clickable:true}});
+  }
   if(window.gsap)gsap.from('.featured-strip article',{y:26,opacity:0,stagger:.12,duration:.55,delay:.25});
 }
 async function categoryPage(){
@@ -298,4 +378,36 @@ function staticPage(){
   if(subtitle)subtitle.textContent=content.subtitle;
   if(target)target.innerHTML=content.html;
 }
-document.addEventListener('DOMContentLoaded',async()=>{setTheme();initShell();void initWeather();await Promise.all([hydrateNews(),hydrateVideos(),refreshBreaking(),loadAdvertisements()]);void hydrateAdSlots();void trackPageView();connectLiveUpdates();const type=document.body.dataset.template;if(type==='home')home();if(type==='category')await categoryPage();if(type==='article')await articlePage();if(type==='search')searchPage();if(type==='live')livePage();if(type==='media')mediaPage(document.body.dataset.media);if(type==='static'){if(document.body.dataset.static==='advertise')await mountAdvertiseMarketplace();else if(document.body.dataset.static==='support')await mountSupportPage();else staticPage();}});
+document.addEventListener('DOMContentLoaded',()=>{
+  setTheme();initShell();void initWeather();
+  const type=document.body.dataset.template;
+  void hydrateAdSlots();void trackPageView();
+  if(type==='home'){
+    // Paint immediately with this browser's last successful feed, if available.
+    restoreCachedNews();
+    const newsTask=hydrateNews();
+    home();
+    void newsTask.then(()=>{
+      // Re-render with fresh API results (or a clear no-feed state) without
+      // waiting for videos, breaking news, or advertisement requests.
+      home();
+      connectLiveUpdates();
+    }).catch(error=>{console.warn('Could not finish refreshing homepage news.',error);home();connectLiveUpdates();});
+    void hydrateVideos().then(()=>{
+      const target=$('#videos');
+      if(target)target.innerHTML=liveVideos.length?liveVideos.slice(0,3).map(videoCard).join(''):videoEmptyState();
+    });
+    void refreshBreaking();
+    void loadAdvertisements();
+    return;
+  }
+  void Promise.all([hydrateNews(),hydrateVideos(),refreshBreaking(),loadAdvertisements()]).then(async()=>{
+    connectLiveUpdates();
+    if(type==='category')await categoryPage();
+    if(type==='article')await articlePage();
+    if(type==='search')searchPage();
+    if(type==='live')livePage();
+    if(type==='media')mediaPage(document.body.dataset.media);
+    if(type==='static'){if(document.body.dataset.static==='advertise')await mountAdvertiseMarketplace();else if(document.body.dataset.static==='support')await mountSupportPage();else staticPage();}
+  }).catch(error=>console.warn('Could not initialise page content.',error));
+});

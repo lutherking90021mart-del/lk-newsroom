@@ -243,7 +243,7 @@ After deployment, use these areas:
 - **Advertise with LK Newsroom** (`/pages/advertise.html`) for companies to send their campaign request.
 - **Support LK Newsroom** (`/pages/support.html`) for memberships and one-time reader donations.
 
-For payments, add only server-side Railway variables: `PAYSTACK_SECRET_KEY`, `STRIPE_SECRET_KEY`, and (for Stripe events) `STRIPE_WEBHOOK_SECRET`. Configure the provider webhooks to call:
+For payments, add only server-side Railway variables: payment-provider secrets (payments are disabled). Configure the provider webhooks to call:
 
 ```text
 https://YOUR-DOMAIN/v1/monetization/paystack/webhook
