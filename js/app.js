@@ -66,22 +66,33 @@ function cacheNewsFeed(rows){
 async function hydrateNews(){
   newsLoading=true;
   try{
-    // Refresh in the background and abort a stalled public request.
-    try{
-      const controller=new AbortController();
-      const timeout=setTimeout(()=>controller.abort(),8000);
-      let response;
-      try{response=await fetch(`${aggregatorApi()}/v1/news?limit=100`,{signal:controller.signal});}
-      finally{clearTimeout(timeout);}
-      if(response.ok){
+    // The homepage no longer waits for this request, so do not abort a slow
+    // but valid response: the result can still replace cached stories later.
+    const endpoint=`${aggregatorApi()}/v1/news?limit=100`;
+    let livePayload=null;
+    let lastError=null;
+    for(let attempt=0;attempt<2;attempt++){
+      try{
+        const response=await fetch(endpoint,{
+          cache:'no-store',
+          headers:{accept:'application/json'}
+        });
+        if(!response.ok)throw new Error(`News API returned HTTP ${response.status}`);
         const payload=await response.json();
         if(Array.isArray(payload.data)&&payload.data.length){
-          feed=payload.data.map(toUiArticle);
-          cacheNewsFeed(payload.data);
-          return true;
+          livePayload=payload.data;
+          break;
         }
-      }
-    }catch(error){console.warn('The live news feed could not be refreshed; keeping the last available feed.',error);}
+        lastError=new Error('The news API returned an empty feed.');
+      }catch(error){lastError=error;}
+      if(attempt===0)await new Promise(resolve=>setTimeout(resolve,700));
+    }
+    if(livePayload){
+      feed=livePayload.map(toUiArticle);
+      cacheNewsFeed(livePayload);
+      return true;
+    }
+    if(lastError)console.warn('Live news refresh did not return stories; preserving the last available feed.',lastError);
     // If the public API fails or returns no stories, keep the last good feed.
     if(configured){
       try{
