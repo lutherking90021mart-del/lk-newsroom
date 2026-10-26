@@ -416,7 +416,9 @@ async function runFeedSync(env: Env, requestedSourceSlug?: string) {
     runCreated = true;
     const sourceFilter = " WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1))))";
     const sourceStatement = requestedSourceSlug
-      ? env.DB.prepare("SELECT * FROM news_sources" + sourceFilter + " AND slug=?3 ORDER BY name").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0, requestedSourceSlug)
+      // Explicit source sync should include the selected enabled row even when
+      // its feed/API configuration is broken, so the source error is recorded.
+      ? env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND slug=?1 ORDER BY name").bind(requestedSourceSlug)
       : env.DB.prepare("SELECT * FROM news_sources" + sourceFilter + " ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0);
     const sources = await sourceStatement.all();
     let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
