@@ -184,7 +184,18 @@ function home(){
   }).sort((a,b)=>new Date(b.publishedAt||0)-new Date(a.publishedAt||0)).slice(0,5);
   $('#gallery').innerHTML=galleryStories.length?galleryStories.map((article,index)=>`<a class="gallery-item" href="/news/${encodeURIComponent(article.id)}" aria-label="Read: ${esc(article.title)}"><img src="${esc(article.image)}" alt="${esc(article.title)}" loading="${index<3?'eager':'lazy'}" onerror="this.closest('.gallery-item')?.remove()"><span>${esc(article.title)}</span></a>`).join(''):'<div class="empty-state"><i class="fa-solid fa-camera fa-2x"></i><p>New story photos will appear here as image-backed news is published.</p><a class="btn btn-outline" href="pages/gallery.html">Open photo gallery</a></div>';
   renderNewsletter($('#newsletter'));
-  $('#load-more')?.addEventListener('click',event=>{event.currentTarget.remove();$('#latest-news').insertAdjacentHTML('beforeend',remainingStories.map(article=>articleCard(article)).join(''));if(window.AOS)AOS.refresh();});
+  const loadMoreButton=$('#load-more');
+  if(loadMoreButton){
+    // home() can run once for cached stories and again for fresh stories; replace
+    // this node so each render has exactly one handler with the latest feed.
+    const freshButton=loadMoreButton.cloneNode(true);
+    loadMoreButton.replaceWith(freshButton);
+    freshButton.addEventListener('click',event=>{
+      event.currentTarget.remove();
+      $('#latest-news').insertAdjacentHTML('beforeend',remainingStories.map(article=>articleCard(article)).join(''));
+      if(window.AOS)AOS.refresh();
+    });
+  }
   if(window.Swiper){
     const heroElement=$('.hero-swiper');
     if(heroElement?.swiper)heroElement.swiper.destroy(true,true);
