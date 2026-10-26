@@ -399,7 +399,7 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
   return { inserted, updated, skipped };
 }
 
-async function runFeedSync(env: Env) {
+async function runFeedSync(env: Env, requestedSourceSlug?: string) {
   const started = new Date().toISOString();
   const lockName = "news-ingestion";
   const lockUntil = new Date(Date.now() + 4 * 60 * 1000).toISOString();
@@ -414,7 +414,11 @@ async function runFeedSync(env: Env) {
   try {
     await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
     runCreated = true;
-    const sources = await env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1)))) ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0).all();
+    const sourceFilter = " WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1))))";
+    const sourceStatement = requestedSourceSlug
+      ? env.DB.prepare("SELECT * FROM news_sources" + sourceFilter + " AND slug=?3 ORDER BY name").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0, requestedSourceSlug)
+      : env.DB.prepare("SELECT * FROM news_sources" + sourceFilter + " ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0);
+    const sources = await sourceStatement.all();
     let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
     const categoryCache = new Map<string, string>();
     for (const source of (sources.results || []) as any[]) {
@@ -1378,6 +1382,91 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ data: rows.results || [] }, 200, origin);
   }
   if (path === "/v1/admin/query" && request.method === "POST") return handleAdminQuery(request, env, origin);
+  if (path === "/v1/admin/sources" && request.method === "GET") {
+    const session = await getAdminSession(request, env);
+    if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+    if (!adminRoleCanRead(session.role, "news_sources")) return json({ error: "Your role cannot view news sources." }, 403, origin);
+    try {
+      const rows = await env.DB.prepare("SELECT id,slug,name,source_type,feed_url,api_endpoint,api_secret_name,country,default_category,enabled,last_synced_at,last_status,last_error,consecutive_failures FROM news_sources ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END,last_synced_at ASC,name ASC").all();
+      return json({ data: (rows.results || []).map((row: any) => ({ ...row, enabled: Number(row.enabled) === 1 })) }, 200, origin);
+    } catch (error) {
+      console.error("Unable to load news sources:", error);
+      return json({ error: "News source status is temporarily unavailable." }, 503, origin);
+    }
+  }
+  const adminSourceMatch = path.match(/^\/v1\/admin\/sources\/([^/]+)$/);
+  if (adminSourceMatch && request.method === "PATCH") {
+    const session = await getAdminSession(request, env);
+    if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+    if (!adminRoleCanWrite(session.role, "news_sources")) return json({ error: "Your role cannot change news sources." }, 403, origin);
+    let body: any;
+    try { body = await request.json(); } catch { return json({ error: "Invalid source update." }, 400, origin); }
+    if (typeof body.enabled !== "boolean") return json({ error: "The enabled value must be true or false." }, 400, origin);
+    let slug = "";
+    try { slug = decodeURIComponent(adminSourceMatch[1]); } catch { return json({ error: "Invalid source identifier." }, 400, origin); }
+    try {
+      const result = await env.DB.prepare("UPDATE news_sources SET enabled=?1,updated_at=?2 WHERE slug=?3")
+        .bind(body.enabled ? 1 : 0, new Date().toISOString(), slug).run();
+      if (Number(result?.meta?.changes || 0) !== 1) return json({ error: "News source not found." }, 404, origin);
+      const row = await env.DB.prepare("SELECT id,slug,name,source_type,country,default_category,enabled,last_synced_at,last_status,last_error,consecutive_failures FROM news_sources WHERE slug=?1 LIMIT 1").bind(slug).first() as any;
+      return json({ data: row ? { ...row, enabled: Number(row.enabled) === 1 } : null }, 200, origin);
+    } catch (error) {
+      console.error("Unable to update news source:", error);
+      return json({ error: "Unable to update this news source." }, 503, origin);
+    }
+  }
+  if (path === "/v1/admin/worker-status" && request.method === "GET") {
+    const session = await getAdminSession(request, env);
+    if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+    if (!adminRoleCanRead(session.role, "news_sources")) return json({ error: "Your role cannot view worker status." }, 403, origin);
+    try {
+      const [lastRun, today, sourceRows] = await Promise.all([
+        env.DB.prepare("SELECT id,trigger,status,started_at,completed_at,fetched,added,updated,skipped,errors,error,details FROM worker_runs ORDER BY started_at DESC LIMIT 1").first(),
+        env.DB.prepare("SELECT COALESCE(SUM(fetched),0) AS fetched,COALESCE(SUM(added),0) AS added,COALESCE(SUM(updated),0) AS updated,COALESCE(SUM(skipped),0) AS skipped,COALESCE(SUM(errors),0) AS errors FROM worker_runs WHERE started_at>=datetime('now','start of day')").first(),
+        env.DB.prepare("SELECT id,slug,name,enabled,last_status,last_error,last_synced_at,consecutive_failures FROM news_sources ORDER BY name ASC").all()
+      ]);
+      const nextScheduledAt = new Date((Math.floor(Date.now() / 300000) + 1) * 300000).toISOString();
+      return json({
+        worker: lastRun || null,
+        today: today || { fetched: 0, added: 0, updated: 0, skipped: 0, errors: 0 },
+        sources: (sourceRows.results || []).map((row: any) => ({ ...row, enabled: Number(row.enabled) === 1 })),
+        nextScheduledAt
+      }, 200, origin);
+    } catch (error) {
+      console.error("Unable to load worker status:", error);
+      return json({ error: "News worker status is temporarily unavailable." }, 503, origin);
+    }
+  }
+  if (path === "/v1/admin/logs" && request.method === "GET") {
+    const session = await getAdminSession(request, env);
+    if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+    if (!adminRoleCanRead(session.role, "feed_logs")) return json({ error: "Your role cannot view feed logs." }, 403, origin);
+    try {
+      const rows = await env.DB.prepare("SELECT l.id,l.source_id,l.level,l.event,l.details,l.duration_ms,l.created_at,s.name AS source_name FROM feed_logs l LEFT JOIN news_sources s ON s.id=l.source_id ORDER BY l.created_at DESC LIMIT 150").all();
+      return json({ data: (rows.results || []).map((row: any) => {
+        const { source_name, ...log } = row;
+        return { ...log, news_sources: source_name ? { name: source_name } : null };
+      }) }, 200, origin);
+    } catch (error) {
+      console.error("Unable to load feed logs:", error);
+      return json({ error: "Feed logs are temporarily unavailable." }, 503, origin);
+    }
+  }
+  if (path === "/v1/admin/sync" && request.method === "POST") {
+    const session = await getAdminSession(request, env);
+    if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
+    if (!adminRoleCanWrite(session.role, "news_sources")) return json({ error: "Your role cannot run feed sync." }, 403, origin);
+    let body: any = {};
+    try { body = await request.json(); } catch {}
+    const sourceSlug = typeof body.source === "string" && body.source.trim() ? body.source.trim().slice(0, 120) : undefined;
+    try {
+      const result = await runFeedSync(env, sourceSlug);
+      return json({ data: result, worker: result }, result.status === "failed" ? 503 : 200, origin);
+    } catch (error) {
+      console.error("Manual feed sync failed:", error);
+      return json({ error: "Manual feed sync failed. Check the feed logs for source errors." }, 503, origin);
+    }
+  }
   if (path === "/v1/admin/media" && ["GET", "POST", "DELETE"].includes(request.method)) return handleAdminMedia(request, env, origin);
   if (path === "/v1/admin/forgot-password" && request.method === "POST") {
     return json({ error: "Email password resets are not configured on this Cloudflare deployment. Ask a super admin to issue a new staff login password." }, 501, origin);
@@ -1397,7 +1486,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (footballDetailMatch && request.method === "GET") {
     return footballFixtureDetail(decodeURIComponent(footballDetailMatch[1]), url.searchParams.get("league") || "");
   }
-  if (path === "/api/news/update" || path === "/v1/admin/sync") {
+  if (path === "/api/news/update") {
     const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") || "";
     if (!env.CRON_SECRET || token !== env.CRON_SECRET) return json({ error: "Unauthorized" }, 401, origin);
     return json({ data: await runFeedSync(env) }, 200, origin);
