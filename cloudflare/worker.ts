@@ -404,7 +404,7 @@ async function emergencyRssStories() {
   return stories;
 }
 
-async function publicEmergencyRssNews(request: Request) {
+async function publicEmergencyRssNews(request: Request, sourceMode: "live-rss" | "live-rss-fallback" = "live-rss-fallback") {
   const url = new URL(request.url);
   const limit = safeLimit(url.searchParams.get("limit"));
   const offset = Math.max(0, Math.min(1000000, Number(url.searchParams.get("offset") || 0) || 0));
@@ -430,7 +430,7 @@ async function publicEmergencyRssNews(request: Request) {
     hasMore: offset + page.length < stories.length,
     offset,
     limit,
-    sourceMode: "live-rss-fallback",
+    sourceMode,
     updatedAt: new Date().toISOString()
   });
 }
@@ -2102,6 +2102,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json({ data: rows.results || [] }, 200, origin);
     });
   }
+  if (path === "/v1/news/live" && request.method === "GET") return withPublicCache(request, 45, 600, () => publicEmergencyRssNews(request, "live-rss"));
   if (path === "/v1/news" && request.method === "GET") return withPublicCache(request, 90, 86400, () => publicNews(request, env));
   if (path === "/v1/breaking" && request.method === "GET") return withPublicCache(request, 60, 86400, () => publicBreaking(env));
   if (path === "/v1/videos" && request.method === "GET") return withPublicCache(request, 300, 86400, () => publicVideos(env, url));
