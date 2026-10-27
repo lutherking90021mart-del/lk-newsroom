@@ -610,7 +610,7 @@ async function publicArticleFromD1(identifier: string, env: Env) {
     env.DB.prepare("SELECT id,title,description,video_url,youtube_url,thumbnail_url,duration_seconds,published_at FROM videos WHERE article_id=?1 AND status='published' ORDER BY published_at DESC LIMIT 6").bind(row.id).all(),
     env.DB.prepare("SELECT id,display_name,body,created_at FROM comments WHERE article_id=?1 AND status='approved' ORDER BY created_at DESC LIMIT 50").bind(row.id).all()
   ]);
-  return json({
+  const payload = {
     data: article,
     related: (related.results || []).map((r: any) => packArticle(r)),
     moreFromSource: (more.results || []).map((r: any) => packArticle(r)),
@@ -619,7 +619,9 @@ async function publicArticleFromD1(identifier: string, env: Env) {
     gallery: gallery.results || [],
     videos: videos.results || [],
     comments: comments.results || []
-  });
+  };
+  await writeArticleCache(env, String(article.id), payload);
+  return json(payload);
 }
 
 async function publicArticle(identifier: string, env: Env) {
@@ -637,7 +639,6 @@ async function publicArticle(identifier: string, env: Env) {
   }
 }
 
-async function publicCategories
 async function publicCategories(slug: string, env: Env) {
   const cat = await env.DB.prepare("SELECT id,name,slug,description,colour FROM categories WHERE lower(slug)=lower(?1) OR lower(name)=lower(?1) LIMIT 1").bind(decodeURIComponent(slug)).first();
   if (!cat && slug !== "ghana") return json({ error: "Category not found" }, 404);
