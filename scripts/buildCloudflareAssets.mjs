@@ -41,7 +41,7 @@ async function cacheBustEntryModules(directory) {
     }
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".html")) continue;
     const html = await readFile(path, "utf8");
-    const updated = html.replace(/((?:\.\.\/)*js\/(?:app|admin)\.js)(?:\?[^"'\s>]*)?/g, `$1?v=${assetVersion}`);
+    const updated = html.replace(/((?:\.\.\/)*js\/(?:app|admin|markets|match-centre)\\.js)(?:\?[^"'\s>]*)?/g, `$1?v=${assetVersion}`);
     if (updated !== html) await writeFile(path, updated, "utf8");
   }
 }
