@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,4 +28,23 @@ await writeFile(resolve(dist, "js/config.js"), config, "utf8");
 await cp(resolve(root, "cloudflare/public-client.js"), resolve(dist, "js/supabase-client.js"));
 await cp(resolve(root, "cloudflare/admin-client.js"), resolve(dist, "js/admin-client.js"));
 await cp(resolve(root, "cloudflare/admin-migration.html"), resolve(dist, "admin-migration.html"));
+// Give the primary page modules a unique URL on every build. This prevents
+// browsers from reusing an older admin.js/app.js after a Worker deployment.
+const assetVersion = Date.now().toString(36);
+async function cacheBustEntryModules(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      await cacheBustEntryModules(path);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".html")) continue;
+    const html = await readFile(path, "utf8");
+    const updated = html.replace(/((?:\.\.\/)*js\/(?:app|admin)\.js)(?:\?[^"'\\s>]*)?/g, `$1?v=${assetVersion}`);
+    if (updated !== html) await writeFile(path, updated, "utf8");
+  }
+}
+await cacheBustEntryModules(dist);
+
 console.log("Cloudflare public assets built into dist/. Server-only folders and environment files were not copied.");
