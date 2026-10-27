@@ -43,7 +43,7 @@ async function cacheBustEntryModules(directory) {
     const html = await readFile(path, "utf8");
     // Refresh local JS and CSS URLs together so browsers cannot keep the old
     // plain/un-styled shell after a deployment. External URLs are untouched.
-    const pattern = /((?:\/|(?:\.\.\/)*)(?:js\/(?:app|admin|markets|match-centre)\.js|styles\/[A-Za-z0-9_./-]+\.css))(?:\?[^"'\s>]*)?/g;
+    const pattern = /((?:\/|(?:\.\.\/)*)(?:js\/(?:app|admin|markets|match-centre)\.js|pwa-install\.js|styles\/[A-Za-z0-9_./-]+\.css))(?:\?[^"'\s>]*)?/g;
     const updated = html.replace(pattern, `$1?v=${assetVersion}`);
     if (updated !== html) await writeFile(path, updated, "utf8");
   }
