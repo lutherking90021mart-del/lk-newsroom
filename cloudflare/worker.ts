@@ -114,6 +114,75 @@ async function withPublicCache(
     throw error;
   }
 }
+const ARTICLE_CACHE_PREFIX = "public-article-cache/by-id/";
+const ARTICLE_CACHE_BACKFILL_STATE = "public-article-cache/backfill-state.json";
+
+async function readArticleCache(env: Env, identifier: string): Promise<any | null> {
+  const key = ARTICLE_CACHE_PREFIX + encodeURIComponent(identifier) + ".json";
+  try {
+    const object = await env.MEDIA.get(key);
+    if (!object) return null;
+    const parsed = JSON.parse(await object.text());
+    return parsed && parsed.data && parsed.data.id ? parsed : null;
+  } catch (error) {
+    console.warn("R2 article cache read failed:", error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function writeArticleCache(env: Env, identifier: string, payload: any): Promise<void> {
+  try {
+    await env.MEDIA.put(ARTICLE_CACHE_PREFIX + encodeURIComponent(identifier) + ".json", JSON.stringify(payload), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" }
+    });
+  } catch (error) {
+    console.warn("R2 article cache write failed:", error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function runArticleCacheBackfill(env: Env) {
+  // Warm a small batch of existing published articles into R2 on each cron
+  // run. D1 is read-only here; public detail requests can then use R2 during
+  // a future D1 quota outage.
+  const batchSize = 80;
+  let state: any = { cursor: "", complete: false };
+  try {
+    const storedState = await env.MEDIA.get(ARTICLE_CACHE_BACKFILL_STATE);
+    if (storedState) state = { ...state, ...JSON.parse(await storedState.text()) };
+    if (state.complete) return;
+    const result = await env.DB.prepare("SELECT " + articleSelect + articleJoin + " WHERE a.id>?1 AND a.status='published' AND a.duplicate_of IS NULL ORDER BY a.id LIMIT ?2")
+      .bind(String(state.cursor || ""), batchSize).all();
+    const rows = (result.results || []) as any[];
+    if (!rows.length) {
+      state.complete = true;
+      state.completedAt = new Date().toISOString();
+      await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } });
+      console.log("LK article cache backfill completed.");
+      return;
+    }
+    const writes = await Promise.allSettled(rows.map(async row => {
+      const article = packArticle(row);
+      const payload = { data: article, related: [], moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] };
+      await writeArticleCache(env, String(article.id), payload);
+    }));
+    if (writes.some(item => item.status === "rejected")) {
+      console.warn("R2 article cache batch had write failures; retrying this cursor batch on the next cron run.");
+      return;
+    }
+    state.cursor = String(rows[rows.length - 1].id);
+    state.cached = Number(state.cached || 0) + rows.length;
+    state.lastRunAt = new Date().toISOString();
+    state.complete = rows.length < batchSize;
+    if (state.complete) state.completedAt = new Date().toISOString();
+    await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } });
+    console.log("LK article cache backfill batch:", JSON.stringify({ cursor: state.cursor, cached: state.cached, complete: state.complete }));
+  } catch (error) {
+    // When D1 has reached the Free-plan daily limit, skip backfill without
+    // disturbing the already-serving public RSS and R2 cache paths.
+    console.warn("LK article cache backfill paused:", error instanceof Error ? error.message : String(error));
+  }
+}
+
 
 function slugify(value: unknown) {
   return String(value || "").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 120) || "general";
@@ -523,7 +592,7 @@ async function publicNews(request: Request, env: Env) {
   return json({ data, total: paginationTotal, totalExact: false, hasMore, offset, limit, updatedAt: new Date().toISOString() });
 }
 
-async function publicArticle(identifier: string, env: Env) {
+async function publicArticleFromD1(identifier: string, env: Env) {
   const id = decodeURIComponent(identifier);
   if (/^feed-[a-f0-9]{24}$/i.test(id)) return publicEmergencyRssArticle(id);
   const by = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? "a.id=?1" : "a.slug=?1";
@@ -553,6 +622,22 @@ async function publicArticle(identifier: string, env: Env) {
   });
 }
 
+async function publicArticle(identifier: string, env: Env) {
+  const id = decodeURIComponent(identifier);
+  if (/^feed-[a-f0-9]{24}$/i.test(id)) return publicEmergencyRssArticle(id);
+  try {
+    return await publicArticleFromD1(identifier, env);
+  } catch (error) {
+    console.error("D1 article read failed; trying the R2 article cache and live publisher feeds.", error instanceof Error ? error.message : String(error));
+    const cached = await readArticleCache(env, id);
+    if (cached) return json(cached);
+    // Feed-backed IDs are self-contained and never require D1. For legacy
+    // uncached records, return a useful error rather than the generic Worker 503.
+    return json({ error: "This stored article is not in the R2 backup cache yet, and D1 is temporarily unavailable. Current publisher feeds are still available.", d1Unavailable: true }, 503);
+  }
+}
+
+async function publicCategories
 async function publicCategories(slug: string, env: Env) {
   const cat = await env.DB.prepare("SELECT id,name,slug,description,colour FROM categories WHERE lower(slug)=lower(?1) OR lower(name)=lower(?1) LIMIT 1").bind(decodeURIComponent(slug)).first();
   if (!cat && slug !== "ghana") return json({ error: "Category not found" }, 404);
@@ -2074,5 +2159,6 @@ export default {
   },
   async scheduled(_event: any, env: Env, ctx: any) {
     ctx.waitUntil(runFeedSync(env));
+    ctx.waitUntil(runArticleCacheBackfill(env));
   }
 };
