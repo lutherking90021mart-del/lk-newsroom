@@ -82,7 +82,7 @@ self.addEventListener('fetch',event=>{
   }
 
   const isPublicStyle=/^\/styles\/[^/]+\.css$/i.test(url.pathname);
-  const isPublicScript=/^(?:\/pwa-install\.js|\/js\/(?:app|components|data|config|sports-center|weather|ads|analytics|monetization-public|supabase-client))\.js$/i.test(url.pathname);
+  const isPublicScript=/^(?:\/pwa-install\.js|\/js\/(?:app|components|data|config|sports-center|weather|ads|analytics|monetization-public|supabase-client)\.js)$/i.test(url.pathname);
   if(isPublicStyle||isPublicScript){
     event.respondWith(fetch(request).then(response=>{
       if(response.ok){
