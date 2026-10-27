@@ -295,7 +295,7 @@ async function articlePage(){
   target.innerHTML='<div class="container section"><div class="spinner"></div></div>';
   try{
     const payload=await getArticle(identifier);const article=toUiArticle(payload.data);document.title=`${article.title} | LK Newsroom`;
-    const original=article.originalUrl?`<p><a class="btn btn-outline" href="${esc(article.originalUrl)}" target="_blank" rel="noopener noreferrer">Read the full story at ${esc(article.source)} <i class="fa-solid fa-arrow-up-right-from-square"></i></a></p>`:'';
+    const original=article.originalUrl?`<div class="article-source-wrap"><a class="btn btn-outline article-source-cta" href="${esc(article.originalUrl)}" target="_blank" rel="noopener noreferrer"><span>Read the full story at</span> <strong>${esc(article.source)}</strong> <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a></div>`:'';
     const sponsor=article.sponsor?`<aside class="sponsored-disclosure"><span>Sponsored</span><strong>Paid partnership with ${article.sponsor.sponsor_url?`<a href="${esc(article.sponsor.sponsor_url)}" target="_blank" rel="sponsored noopener">${esc(article.sponsor.sponsor_name)}</a>`:esc(article.sponsor.sponsor_name)}</strong>${article.sponsor.campaign_details?`<p>${esc(article.sponsor.campaign_details)}</p>`:''}</aside>`:'';
     const tags=(article.tags||[]).map(tag=>`<span class="tag">${esc(tag)}</span>`).join('')||`<span class="tag">${esc(article.category)}</span>`;
     const comments=payload.comments||[];
