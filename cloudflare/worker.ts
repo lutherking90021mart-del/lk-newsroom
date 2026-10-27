@@ -26,6 +26,22 @@ const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 100;
 const breakingTerms = /\b(breaking|just in|developing|urgent|emergency|alert|dies|dead|resigns?)\b/i;
 
+// Read-only emergency publisher feeds used when D1 is temporarily unavailable.
+// These feeds do not write to D1; normal scheduled ingestion resumes once the
+// database's daily read quota resets.
+const EMERGENCY_RSS_SOURCES = [
+  { slug: "joynews", name: "JoyNews", feed_url: "https://www.myjoyonline.com/feed/", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "citi-newsroom", name: "Citi Newsroom", feed_url: "https://www.citinewsroom.com/rss/topstories.rss", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "ghanaweb", name: "GhanaWeb", feed_url: "https://www.ghanaweb.com/GhanaHomePage/NewsArchive/rss.xml", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "3news", name: "3News / TV3 Ghana", feed_url: "https://3news.com/feed/", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "adom-online", name: "Adom Online", feed_url: "https://www.adomonline.com/feed/", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "bbc-news", name: "BBC News", feed_url: "https://feeds.bbci.co.uk/news/rss.xml", country: "United Kingdom", default_category: "World", source_type: "rss" },
+  { slug: "bbc-sport", name: "BBC Sport Football", feed_url: "https://feeds.bbci.co.uk/sport/football/rss.xml", country: "United Kingdom", default_category: "Sports", source_type: "rss" },
+  { slug: "al-jazeera", name: "Al Jazeera", feed_url: "https://www.aljazeera.com/xml/rss/all.xml", country: "Qatar", default_category: "World", source_type: "rss" },
+  { slug: "africanews", name: "Africanews", feed_url: "https://www.africanews.com/feed/rss", country: "Africa", default_category: "Africa", source_type: "rss" },
+  { slug: "news24", name: "News24", feed_url: "https://feeds.24.com/articles/news24/topstories/rss", country: "South Africa", default_category: "Africa", source_type: "rss" }
+];
+
 function json(data: unknown, status = 200, origin = "*") {
   return new Response(JSON.stringify(data), {
     status,
@@ -259,6 +275,86 @@ async function sourceIdFor(env: Env, source: string) {
   return row ? String(row.id) : source;
 }
 
+async function emergencyRssStories() {
+  const results = await Promise.allSettled(EMERGENCY_RSS_SOURCES.map(async source => ({
+    source,
+    items: await parseFeed(source)
+  })));
+  const seen = new Set<string>();
+  const stories: any[] = [];
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const { source, items } = result.value;
+    for (const item of items) {
+      const key = String(item.url || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const hash = (await sha(key)).slice(0, 24);
+      stories.push({
+        id: "feed-" + hash,
+        slug: "live-" + slugify(source.slug + "-" + item.title).slice(0, 86) + "-" + hash.slice(0, 8),
+        title: String(item.title || "").slice(0, 800),
+        excerpt: String(item.summary || "").slice(0, 5000),
+        ai_summary: String(item.summary || "").slice(0, 5000),
+        content: String(item.content || item.summary || "").slice(0, 20000),
+        featured_image_url: item.image || null,
+        original_url: item.url,
+        published_at: item.published || new Date().toISOString(),
+        created_at: item.published || new Date().toISOString(),
+        updated_at: item.published || new Date().toISOString(),
+        source_updated_at: item.published || new Date().toISOString(),
+        country: source.country,
+        view_count: 0,
+        auto_tags: [],
+        news_sources: { name: source.name, slug: source.slug },
+        categories: { name: source.default_category, slug: slugify(source.default_category) },
+        is_live_rss_fallback: true
+      });
+    }
+  }
+  stories.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
+  return stories;
+}
+
+async function publicEmergencyRssNews(request: Request) {
+  const url = new URL(request.url);
+  const limit = safeLimit(url.searchParams.get("limit"));
+  const offset = Math.max(0, Math.min(1000000, Number(url.searchParams.get("offset") || 0) || 0));
+  const category = String(url.searchParams.get("category") || "").trim().toLowerCase();
+  const source = String(url.searchParams.get("source") || "").trim().toLowerCase();
+  const query = String(url.searchParams.get("q") || url.searchParams.get("search") || "").trim().toLowerCase();
+  const view = String(url.searchParams.get("view") || "latest").toLowerCase();
+  let stories = await emergencyRssStories();
+  if (category) stories = stories.filter(item => item.categories?.slug === slugify(category) || String(item.categories?.name || "").toLowerCase() === category || (category === "world" && ["world", "international"].includes(String(item.categories?.name || "").toLowerCase())));
+  if (source) stories = stories.filter(item => item.news_sources?.slug === source || String(item.news_sources?.name || "").toLowerCase() === source);
+  if (query) stories = stories.filter(item => (item.title + " " + item.excerpt + " " + item.content).toLowerCase().includes(query));
+  const now = Date.now();
+  if (view === "today") stories = stories.filter(item => now - new Date(item.published_at).getTime() < 24 * 60 * 60 * 1000);
+  if (view === "week") stories = stories.filter(item => now - new Date(item.published_at).getTime() < 7 * 24 * 60 * 60 * 1000);
+  const page = stories.slice(offset, offset + limit);
+  if (!page.length && !stories.length) {
+    return json({ data: [], total: 0, offset, limit, hasMore: false, sourceMode: "rss-unavailable", error: "The database is temporarily unavailable and publisher RSS feeds could not be reached." }, 503);
+  }
+  return json({
+    data: page,
+    total: stories.length,
+    totalExact: true,
+    hasMore: offset + page.length < stories.length,
+    offset,
+    limit,
+    sourceMode: "live-rss-fallback",
+    updatedAt: new Date().toISOString()
+  });
+}
+
+async function publicEmergencyRssArticle(identifier: string) {
+  const stories = await emergencyRssStories();
+  const article = stories.find(item => item.id === identifier);
+  if (!article) return json({ error: "This live publisher story is no longer in the current RSS feed." }, 404);
+  const related = stories.filter(item => item.id !== identifier && item.categories?.slug === article.categories?.slug).slice(0, 6);
+  return json({ data: article, related, moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] });
+}
+
 async function publicNews(request: Request, env: Env) {
   const u = new URL(request.url);
   const limit = safeLimit(u.searchParams.get("limit"));
@@ -287,8 +383,14 @@ async function publicNews(request: Request, env: Env) {
   }
   const where = " WHERE " + filters.join(" AND ");
   const sortOrder = view === "trending" || view === "most-read" ? "a.view_count DESC, COALESCE(a.published_at,a.created_at) DESC" : "COALESCE(a.published_at,a.created_at) DESC";
-  const rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY " + sortOrder + " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
-    .bind(...args, limit, offset).all();
+  let rows: any;
+  try {
+    rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY " + sortOrder + " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
+      .bind(...args, limit, offset).all();
+  } catch (error) {
+    console.error("D1 public news read failed; serving live publisher RSS fallback.", error instanceof Error ? error.message : String(error));
+    return publicEmergencyRssNews(request);
+  }
   const data = (rows.results || []).map((r: any) => packArticle(r));
   // Avoid a full COUNT(*) scan of ~25k+ articles on every page view. The
   // existing Load More UI only needs a forward-pagination signal here.
@@ -299,6 +401,7 @@ async function publicNews(request: Request, env: Env) {
 
 async function publicArticle(identifier: string, env: Env) {
   const id = decodeURIComponent(identifier);
+  if (/^feed-[a-f0-9]{24}$/i.test(id)) return publicEmergencyRssArticle(id);
   const by = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? "a.id=?1" : "a.slug=?1";
   const row = await articleQuery(env, " WHERE " + by + " AND a.status='published' AND a.duplicate_of IS NULL").bind(id).first();
   if (!row) return json({ error: "Article not found" }, 404);
