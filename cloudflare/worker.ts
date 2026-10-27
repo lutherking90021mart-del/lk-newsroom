@@ -590,20 +590,71 @@ async function fetchSourceEntries(source: any, env: Env): Promise<any[]> {
   throw new Error("Unsupported source type: " + String(source.source_type || "unknown"));
 }
 
+function canonicalArticleUrl(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    url.hash = "";
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (/^(utm_.+|fbclid|gclid|dclid|mc_cid|mc_eid|igshid|ref_src|ref_url)$/i.test(key)) url.searchParams.delete(key);
+    }
+    if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 async function upsertFeedArticles(env: Env, source: any, entries: any[], categoryId: string, categoryStatement: any) {
   if (!entries.length) {
     if (categoryStatement) await env.DB.batch([categoryStatement]);
     return { inserted: 0, updated: 0, skipped: 0 };
   }
-  const externalIds = Array.from(new Set(entries.map(item => String(item.external).slice(0, 1000))));
+
+  const normalizedEntries = entries.map(item => ({
+    ...item,
+    url: canonicalArticleUrl(item.url),
+    external: String(item.external || item.url || (item.title + "|" + item.published)).slice(0, 1000)
+  })).filter(item => item.url && item.title);
+  if (!normalizedEntries.length) {
+    if (categoryStatement) await env.DB.batch([categoryStatement]);
+    return { inserted: 0, updated: 0, skipped: entries.length };
+  }
+
+  const externalIds = Array.from(new Set(normalizedEntries.map(item => String(item.external).slice(0, 1000))));
+  const candidateUrls = Array.from(new Set(normalizedEntries.flatMap(item => {
+    const raw = String(item.url || "").trim();
+    const canonical = canonicalArticleUrl(raw);
+    return [raw, canonical].filter(Boolean);
+  })));
   const externalPlaceholders = externalIds.map((_value, index) => "?" + (index + 2)).join(",");
-  const existingRows = await env.DB.prepare("SELECT id,external_id FROM articles WHERE source_id=?1 AND external_id IN (" + externalPlaceholders + ")")
-    .bind(source.id, ...externalIds).all();
+  const urlStart = externalIds.length + 2;
+  const urlPlaceholders = candidateUrls.map((_value, index) => "?" + (urlStart + index)).join(",");
+  const lookupConditions = ["(source_id=?1 AND external_id IN (" + externalPlaceholders + "))"];
+  if (candidateUrls.length) lookupConditions.push("original_url IN (" + urlPlaceholders + ")");
+  const existingRows = await env.DB.prepare("SELECT id,external_id,original_url,source_id FROM articles WHERE " + lookupConditions.join(" OR "))
+    .bind(source.id, ...externalIds, ...candidateUrls).all();
+
   const existingByExternal = new Map<string, string>();
-  for (const row of (existingRows.results || []) as any[]) existingByExternal.set(String(row.external_id), String(row.id));
+  const existingByUrl = new Map<string, string>();
+  const crossSourceUrls = new Set<string>();
+  for (const row of (existingRows.results || []) as any[]) {
+    const external = String(row.external_id || "");
+    const canonicalUrl = canonicalArticleUrl(row.original_url);
+    if (String(row.source_id) === String(source.id)) {
+      if (external) existingByExternal.set(external, String(row.id));
+      if (canonicalUrl) existingByUrl.set(canonicalUrl, String(row.id));
+    } else if (canonicalUrl) {
+      // A story already stored under another publisher URL must not be inserted
+      // again merely because a syndicated feed uses a different GUID.
+      crossSourceUrls.add(canonicalUrl);
+    }
+  }
 
   const hashesByExternal = new Map<string, string>();
-  for (const item of entries) hashesByExternal.set(String(item.external).slice(0, 1000), await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim()));
+  for (const item of normalizedEntries) hashesByExternal.set(String(item.external).slice(0, 1000), await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim()));
   const hashes = Array.from(new Set(Array.from(hashesByExternal.values())));
   const externalHashes = hashes.length ? await env.DB.prepare("SELECT content_hash,source_id FROM articles WHERE content_hash IN (" + hashes.map((_value, index) => "?" + (index + 1)).join(",") + ")")
     .bind(...hashes).all() : { results: [] };
@@ -616,28 +667,32 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
   if (categoryStatement) statements.push(categoryStatement);
   let inserted = 0, updated = 0, skipped = 0;
   const seenThisRun = new Set<string>();
-  for (const item of entries) {
+  for (const item of normalizedEntries) {
     const external = String(item.external).slice(0, 1000);
+    const url = canonicalArticleUrl(item.url);
     const hash = hashesByExternal.get(external) || await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim());
-    if (crossSourceHashes.has(hash) || seenThisRun.has(source.slug + "|" + external)) {
+    const runKey = source.slug + "|url:" + url;
+    if (crossSourceUrls.has(url) || crossSourceHashes.has(hash) || seenThisRun.has(runKey) || seenThisRun.has(source.slug + "|external:" + external)) {
       skipped++;
       continue;
     }
-    seenThisRun.add(source.slug + "|" + external);
-    const existingId = existingByExternal.get(external);
+    seenThisRun.add(runKey);
+    seenThisRun.add(source.slug + "|external:" + external);
+    const existingId = existingByExternal.get(external) || existingByUrl.get(url);
     const id = existingId || crypto.randomUUID();
-    const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(external)).slice(0, 8));
+    // URL-based slugs remain stable if a publisher changes its item GUID.
+    const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(url)).slice(0, 8));
     const now = new Date().toISOString();
     const isBreaking = breakingTerms.test(item.title + " " + item.summary) ? 1 : 0;
     statements.push(
-      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'published',?8,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,published_at=excluded.published_at,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
-        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 5000), item.content.slice(0, 20000), item.image, item.url, isBreaking, item.published, now, categoryId, source.id, external, source.country, hash),
+      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'published',?8,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,external_id=excluded.external_id,published_at=excluded.published_at,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
+        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 5000), item.content.slice(0, 20000), item.image, url, isBreaking, item.published, now, categoryId, source.id, external, source.country, hash),
       env.DB.prepare("INSERT INTO live_updates(id,article_id,title,body,kind,pinned,published_at,created_at) VALUES (?1,?2,?3,?4,?5,0,?6,?7) ON CONFLICT(article_id) DO UPDATE SET title=excluded.title,body=excluded.body,kind=excluded.kind,published_at=excluded.published_at")
         .bind(crypto.randomUUID(), id, item.title.slice(0, 800), item.summary.slice(0, 5000), isBreaking ? "breaking" : "news", item.published, now)
     );
     if (isBreaking) {
       statements.push(env.DB.prepare("INSERT INTO breaking_news(id,article_id,source_id,headline,link_url,active,pinned,starts_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,1,0,?6,?7,?7) ON CONFLICT(article_id) DO UPDATE SET headline=excluded.headline,link_url=excluded.link_url,active=1,starts_at=excluded.starts_at")
-        .bind(crypto.randomUUID(), id, source.id, item.title.slice(0, 800), item.url, item.published, now));
+        .bind(crypto.randomUUID(), id, source.id, item.title.slice(0, 800), url, item.published, now));
     }
     if (existingId) updated++; else inserted++;
   }
