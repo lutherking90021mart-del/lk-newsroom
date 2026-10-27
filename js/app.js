@@ -168,10 +168,10 @@ function takeUnused(stories,count,used){const selected=[];for(const story of sto
 function home(){
   const used=new Set();
   const heroStories=takeUnused(feed,3,used);renderHero(heroStories);
-  const featuredStories=takeUnused(feed,9,used);
-  const editorStories=takeUnused([...feed].filter(article=>article.category==='Opinion'||article.category==='Politics'||article.category==='Business').concat(feed),8,used);
-  const latestStories=takeUnused(feed,24,used);
-  const trendingStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),9,used);
+  const featuredStories=takeUnused(feed,3,used);
+  const editorStories=takeUnused([...feed].filter(article=>article.category==='Opinion'||article.category==='Politics'||article.category==='Business').concat(feed),4,used);
+  const latestStories=takeUnused(feed,6,used);
+  const trendingStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),3,used);
   const mostReadStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),4,used);
   const remainingStories=feed.filter(article=>!used.has(String(article.id||article.slug||article.title)));
   const feedNotice=`<div class="empty-state newsroom-feed-state"><i class="fa-solid fa-newspaper fa-2x"></i><p>${newsLoading?'Loading the latest stories…':'The live news feed is temporarily unavailable. Please try again shortly.'}</p></div>`;
