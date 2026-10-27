@@ -130,13 +130,15 @@ async function readArticleCache(env: Env, identifier: string): Promise<any | nul
   }
 }
 
-async function writeArticleCache(env: Env, identifier: string, payload: any): Promise<void> {
+async function writeArticleCache(env: Env, identifier: string, payload: any): Promise<boolean> {
   try {
     await env.MEDIA.put(ARTICLE_CACHE_PREFIX + encodeURIComponent(identifier) + ".json", JSON.stringify(payload), {
       httpMetadata: { contentType: "application/json; charset=utf-8" }
     });
+    return true;
   } catch (error) {
     console.warn("R2 article cache write failed:", error instanceof Error ? error.message : String(error));
+    return false;
   }
 }
 
@@ -160,12 +162,12 @@ async function runArticleCacheBackfill(env: Env) {
       console.log("LK article cache backfill completed.");
       return;
     }
-    const writes = await Promise.allSettled(rows.map(async row => {
+    const writes = await Promise.all(rows.map(async row => {
       const article = packArticle(row);
       const payload = { data: article, related: [], moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] };
-      await writeArticleCache(env, String(article.id), payload);
+      return writeArticleCache(env, String(article.id), payload);
     }));
-    if (writes.some(item => item.status === "rejected")) {
+    if (writes.some(ok => !ok)) {
       console.warn("R2 article cache batch had write failures; retrying this cursor batch on the next cron run.");
       return;
     }
@@ -584,10 +586,18 @@ async function publicNews(request: Request, env: Env) {
     console.error("D1 public news read failed; serving live publisher RSS fallback.", error instanceof Error ? error.message : String(error));
     return publicEmergencyRssNews(request);
   }
-  const data = (rows.results || []).map((r: any) => packArticle(r));
+  const seenUrls = new Set<string>();
+  const uniqueRows = ((rows.results || []) as any[]).filter((row: any) => {
+    const canonicalUrl = canonicalArticleUrl(row.original_url);
+    if (!canonicalUrl) return true;
+    if (seenUrls.has(canonicalUrl)) return false;
+    seenUrls.add(canonicalUrl);
+    return true;
+  });
+  const data = uniqueRows.map((r: any) => packArticle(r));
   // Avoid a full COUNT(*) scan of ~25k+ articles on every page view. The
   // existing Load More UI only needs a forward-pagination signal here.
-  const hasMore = data.length >= limit;
+  const hasMore = (rows.results || []).length >= limit;
   const paginationTotal = offset + data.length + (hasMore ? 1 : 0);
   return json({ data, total: paginationTotal, totalExact: false, hasMore, offset, limit, updatedAt: new Date().toISOString() });
 }
