@@ -34,7 +34,7 @@ const categoryDetails={
   latest:{title:'Latest News',subtitle:'The newest verified reporting, analysis and explainers from LK Newsroom.'}
 };
 function selectedCategory(){const route=location.pathname.match(/^\/category\/([^/]+)\/?$/);const requested=route?decodeURIComponent(route[1]):query.get('category')||document.body.dataset.category||'Latest';return categories.find(([name])=>categorySlug(name)===categorySlug(requested))?.[0]||'Latest';}
-const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Updated just now';if(minutes<60)return `Updated ${minutes} minute${minutes===1?'':'s'} ago`;const hours=Math.floor(minutes/60);if(hours<24)return `Updated ${hours} hour${hours===1?'':'s'} ago`;const days=Math.floor(hours/24);return days===1?'Updated yesterday':`Updated ${days} days ago`;};
+const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Published just now';if(minutes<60)return 'Published '+minutes+' minute'+(minutes===1?'':'s')+' ago';const hours=Math.floor(minutes/60);if(hours<24)return 'Published '+hours+' hour'+(hours===1?'':'s')+' ago';const days=Math.floor(hours/24);return days===1?'Published yesterday':'Published '+days+' days ago';}
 const uiDate=date=>new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date));
 const toUiArticle=row=>({
   id:row.id,slug:row.slug||row.id,title:row.title,excerpt:row.excerpt||row.ai_summary||'',
@@ -66,39 +66,56 @@ function cacheNewsFeed(rows){
 async function hydrateNews(){
   newsLoading=true;
   try{
-    // The homepage no longer waits for this request, so do not abort a slow
-    // but valid response: the result can still replace cached stories later.
-    const endpoint=`${aggregatorApi()}/v1/news?limit=100`;
-    let livePayload=null;
-    let lastError=null;
-    for(let attempt=0;attempt<2;attempt++){
+    const fetchRows=async endpoint=>{
+      const controller=new AbortController();
+      const timeout=setTimeout(()=>controller.abort(),15000);
       try{
         const response=await fetch(endpoint,{
           cache:'no-store',
-          headers:{accept:'application/json'}
+          headers:{accept:'application/json'},
+          signal:controller.signal
         });
         if(!response.ok)throw new Error(`News API returned HTTP ${response.status}`);
         const payload=await response.json();
-        if(Array.isArray(payload.data)&&payload.data.length){
-          livePayload=payload.data;
-          break;
-        }
-        lastError=new Error('The news API returned an empty feed.');
-      }catch(error){lastError=error;}
-      if(attempt===0)await new Promise(resolve=>setTimeout(resolve,700));
+        return payload&&Array.isArray(payload.data)&&payload.data.length?payload:null;
+      }finally{clearTimeout(timeout);}
+    };
+
+    // Prefer the independent publisher endpoint. It does not query D1, so a
+    // D1 quota outage or a stale DB cache cannot hide today's RSS stories.
+    let payload=null;
+    let lastError=null;
+    const liveEndpoint=`${aggregatorApi()}/v1/news/live?limit=100`;
+    for(let attempt=0;attempt<2&&!payload;attempt++){
+      try{payload=await fetchRows(liveEndpoint);}
+      catch(error){lastError=error;}
+      if(!payload&&attempt===0)await new Promise(resolve=>setTimeout(resolve,700));
     }
-    if(livePayload){
-      feed=livePayload.map(toUiArticle);
-      cacheNewsFeed(livePayload);
+
+    // If publisher feeds are unreachable, fall back to the cached/D1 news API.
+    if(!payload){
+      try{payload=await fetchRows(`${aggregatorApi()}/v1/news?limit=100`);}
+      catch(error){lastError=error;}
+    }
+
+    if(payload){
+      const rows=payload.data;
+      feed=rows.map(toUiArticle).sort((a,b)=>{
+        const dateA=Date.parse(a.publishedAt||0)||0;
+        const dateB=Date.parse(b.publishedAt||0)||0;
+        return dateB-dateA;
+      });
+      cacheNewsFeed(rows);
+      if(payload.sourceMode)console.info('LK Newsroom feed source:',payload.sourceMode,'stories:',feed.length);
       return true;
     }
-    if(lastError)console.warn('Live news refresh did not return stories; preserving the last available feed.',lastError);
-    // If the public API fails or returns no stories, keep the last good feed.
+
+    if(lastError)console.warn('Live publisher and stored-news endpoints are unavailable; retaining the last saved feed.',lastError);
     if(configured){
       try{
         const rows=await newsApi.published({limit:100});
         if(rows?.length){
-          feed=rows.map(toUiArticle);
+          feed=rows.map(toUiArticle).sort((a,b)=>(Date.parse(b.publishedAt||0)||0)-(Date.parse(a.publishedAt||0)||0));
           cacheNewsFeed(rows);
           return true;
         }
@@ -278,7 +295,7 @@ async function articlePage(){
   target.innerHTML='<div class="container section"><div class="spinner"></div></div>';
   try{
     const payload=await getArticle(identifier);const article=toUiArticle(payload.data);document.title=`${article.title} | LK Newsroom`;
-    const original=article.originalUrl?`<p><a class="btn btn-outline" href="${esc(article.originalUrl)}" target="_blank" rel="noopener noreferrer">Read the full story at ${esc(article.source)} <i class="fa-solid fa-arrow-up-right-from-square"></i></a></p>`:'';
+    const original=article.originalUrl?`<div class="article-source-wrap"><a class="btn btn-outline article-source-cta" href="${esc(article.originalUrl)}" target="_blank" rel="noopener noreferrer"><span>Read the full story at</span> <strong>${esc(article.source)}</strong> <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a></div>`:'';
     const sponsor=article.sponsor?`<aside class="sponsored-disclosure"><span>Sponsored</span><strong>Paid partnership with ${article.sponsor.sponsor_url?`<a href="${esc(article.sponsor.sponsor_url)}" target="_blank" rel="sponsored noopener">${esc(article.sponsor.sponsor_name)}</a>`:esc(article.sponsor.sponsor_name)}</strong>${article.sponsor.campaign_details?`<p>${esc(article.sponsor.campaign_details)}</p>`:''}</aside>`:'';
     const tags=(article.tags||[]).map(tag=>`<span class="tag">${esc(tag)}</span>`).join('')||`<span class="tag">${esc(article.category)}</span>`;
     const comments=payload.comments||[];

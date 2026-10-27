@@ -26,6 +26,22 @@ const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 100;
 const breakingTerms = /\b(breaking|just in|developing|urgent|emergency|alert|dies|dead|resigns?)\b/i;
 
+// Read-only emergency publisher feeds used when D1 is temporarily unavailable.
+// These feeds do not write to D1; normal scheduled ingestion resumes once the
+// database's daily read quota resets.
+const EMERGENCY_RSS_SOURCES = [
+  { slug: "joynews", name: "JoyNews", feed_url: "https://www.myjoyonline.com/feed/", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "citi-newsroom", name: "Citi Newsroom", feed_url: "https://www.citinewsroom.com/rss/topstories.rss", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "ghanaweb", name: "GhanaWeb", feed_url: "https://www.ghanaweb.com/GhanaHomePage/NewsArchive/rss.xml", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "3news", name: "3News / TV3 Ghana", feed_url: "https://3news.com/feed/", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "adom-online", name: "Adom Online", feed_url: "https://www.adomonline.com/feed/", country: "Ghana", default_category: "Ghana", source_type: "rss" },
+  { slug: "bbc-news", name: "BBC News", feed_url: "https://feeds.bbci.co.uk/news/rss.xml", country: "United Kingdom", default_category: "World", source_type: "rss" },
+  { slug: "bbc-sport", name: "BBC Sport Football", feed_url: "https://feeds.bbci.co.uk/sport/football/rss.xml", country: "United Kingdom", default_category: "Sports", source_type: "rss" },
+  { slug: "al-jazeera", name: "Al Jazeera", feed_url: "https://www.aljazeera.com/xml/rss/all.xml", country: "Qatar", default_category: "World", source_type: "rss" },
+  { slug: "africanews", name: "Africanews", feed_url: "https://www.africanews.com/feed/rss", country: "Africa", default_category: "Africa", source_type: "rss" },
+  { slug: "news24", name: "News24", feed_url: "https://feeds.24.com/articles/news24/topstories/rss", country: "South Africa", default_category: "Africa", source_type: "rss" }
+];
+
 function json(data: unknown, status = 200, origin = "*") {
   return new Response(JSON.stringify(data), {
     status,
@@ -38,6 +54,154 @@ function json(data: unknown, status = 200, origin = "*") {
     }
   });
 }
+function cachedClientResponse(response: Response, cacheState: "fresh" | "stale") {
+  const headers = new Headers(response.headers);
+  // Keep the browser from pinning a stale API response; only the Worker edge
+  // cache should retain it between requests.
+  headers.set("cache-control", "no-store");
+  headers.set("x-lk-news-cache", cacheState);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function withPublicCache(
+  request: Request,
+  freshSeconds: number,
+  staleSeconds: number,
+  loader: () => Promise<Response>
+): Promise<Response> {
+  const edgeCaches = (globalThis as unknown as { caches?: { default?: Cache } }).caches;
+  const cache = edgeCaches?.default;
+  if (!cache) return loader();
+  const makeKey = (kind: "fresh" | "stale") => {
+    const keyUrl = new URL(request.url);
+    keyUrl.searchParams.set("__lk_edge_cache", kind);
+    return new Request(keyUrl.toString(), { method: "GET" });
+  };
+  const freshKey = makeKey("fresh");
+  const staleKey = makeKey("stale");
+  try {
+    const fresh = await cache.match(freshKey);
+    if (fresh) return cachedClientResponse(fresh, "fresh");
+  } catch {}
+  let stale: Response | undefined;
+  try { stale = (await cache.match(staleKey)) || undefined; } catch {}
+  try {
+    const response = await loader();
+    if (response.ok) {
+      const body = await response.clone().arrayBuffer();
+      const baseHeaders = new Headers(response.headers);
+      baseHeaders.delete("set-cookie");
+      const freshHeaders = new Headers(baseHeaders);
+      freshHeaders.set("cache-control", `public, max-age=${Math.max(1, freshSeconds)}`);
+      const staleHeaders = new Headers(baseHeaders);
+      staleHeaders.set("cache-control", `public, max-age=${Math.max(freshSeconds, staleSeconds)}`);
+      try {
+        await Promise.all([
+          cache.put(freshKey, new Response(body.slice(0), { status: response.status, statusText: response.statusText, headers: freshHeaders })),
+          cache.put(staleKey, new Response(body.slice(0), { status: response.status, statusText: response.statusText, headers: staleHeaders }))
+        ]);
+      } catch (error) {
+        console.warn("LK Newsroom edge cache write skipped:", error instanceof Error ? error.message : String(error));
+      }
+    } else if (stale) {
+      return cachedClientResponse(stale, "stale");
+    }
+    return response;
+  } catch (error) {
+    // D1 Free-plan limits or a temporary query failure should not blank the
+    // newsroom when a recent successful response is available at this edge.
+    if (stale) return cachedClientResponse(stale, "stale");
+    throw error;
+  }
+}
+const ARTICLE_CACHE_PREFIX = "public-article-cache/by-id/";
+const ARTICLE_CACHE_BACKFILL_STATE = "public-article-cache/backfill-state.json";
+
+async function readArticleCache(env: Env, identifier: string): Promise<any | null> {
+  const key = ARTICLE_CACHE_PREFIX + encodeURIComponent(identifier) + ".json";
+  try {
+    const object = await env.MEDIA.get(key);
+    if (!object) return null;
+    const parsed = JSON.parse(await object.text());
+    return parsed && parsed.data && parsed.data.id ? parsed : null;
+  } catch (error) {
+    console.warn("R2 article cache read failed:", error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function writeArticleCache(env: Env, identifier: string, payload: any): Promise<boolean> {
+  try {
+    await env.MEDIA.put(ARTICLE_CACHE_PREFIX + encodeURIComponent(identifier) + ".json", JSON.stringify(payload), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" }
+    });
+    return true;
+  } catch (error) {
+    console.warn("R2 article cache write failed:", error instanceof Error ? error.message : String(error));
+    return false;
+  }
+}
+
+async function runArticleCacheBackfill(env: Env) {
+  // Warm a small batch of existing published articles into R2 on each cron
+  // run. D1 is read-only here; public detail requests can then use R2 during
+  // a future D1 quota outage.
+  // Stay below the Workers Free CPU/subrequest budgets. This is a resumable
+  // keyset scan; 25 R2 article writes per minute warms the archive in about 17 hours.
+  const batchSize = 25;
+  let state: any = { cursor: "", complete: false };
+  try {
+    const storedState = await env.MEDIA.get(ARTICLE_CACHE_BACKFILL_STATE);
+    if (storedState) state = { ...state, ...JSON.parse(await storedState.text()) };
+    if (state.complete) return;
+    if (Number(state.retryAt || 0) > Date.now()) return;
+    const result = await env.DB.prepare("SELECT " + articleSelect + articleJoin + " WHERE a.id>?1 AND a.status='published' AND a.duplicate_of IS NULL ORDER BY a.id LIMIT ?2")
+      .bind(String(state.cursor || ""), batchSize).all();
+    const rows = (result.results || []) as any[];
+    if (!rows.length) {
+      state.complete = true;
+      state.completedAt = new Date().toISOString();
+      await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } });
+      console.log("LK article cache backfill completed.");
+      return;
+    }
+    let writeFailure = false;
+    // Keep only five R2 writes in flight at once; the Free plan allows six
+    // simultaneously opening outbound connections per Worker invocation.
+    for (let offset = 0; offset < rows.length; offset += 5) {
+      const group = rows.slice(offset, offset + 5);
+      const writes = await Promise.all(group.map(async row => {
+        const article = packArticle(row);
+        const payload = { data: article, related: [], moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] };
+        return writeArticleCache(env, String(article.id), payload);
+      }));
+      if (writes.some(ok => !ok)) writeFailure = true;
+    }
+    if (writeFailure) {
+      console.warn("R2 article cache batch had write failures; retrying this cursor batch on the next cron run.");
+      return;
+    }
+    state.cursor = String(rows[rows.length - 1].id);
+    state.cached = Number(state.cached || 0) + rows.length;
+    state.lastRunAt = new Date().toISOString();
+    state.complete = rows.length < batchSize;
+    if (state.complete) state.completedAt = new Date().toISOString();
+    await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } });
+    console.log("LK article cache backfill batch:", JSON.stringify({ cursor: state.cursor, cached: state.cached, complete: state.complete }));
+  } catch (error) {
+    // When D1 has reached the Free-plan daily limit, pause this background
+    // job until midnight UTC instead of hammering the exhausted database.
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("LK article cache backfill paused:", message);
+    state.lastError = message.slice(0, 500);
+    state.retryAt = /daily row read limit|daily row write limit/i.test(message)
+      ? (Math.floor(Date.now() / 86400000) + 1) * 86400000
+      : Date.now() + 10 * 60 * 1000;
+    await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } }).catch(() => undefined);
+  }
+}
+
+
 function slugify(value: unknown) {
   return String(value || "").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 120) || "general";
 }
@@ -68,19 +232,91 @@ function pickLink(value: unknown): string {
   }
   return "";
 }
-function imageOf(item: Record<string, any>): string | null {
-  const candidates = [item.thumbnail, item.image, item.enclosure, item.content, item.group, item.description, item.summary];
-  for (const candidate of candidates) {
-    for (const value of asList(candidate)) {
-      if (typeof value === "string") {
-        const found = value.match(/<img\b[^>]*\b(?:src|data-src|data-original)=["']([^"']+)["']/i);
-        if (found && /^https?:\/\//i.test(found[1])) return found[1];
-      } else if (value && typeof value === "object") {
-        const v = value as Record<string, unknown>;
-        const url = text(v["@_url"] || v["@_href"] || v["@_src"] || v.url || v.href).trim();
-        if (/^https?:\/\//i.test(url)) return url;
+function imageOf(item: Record<string, any>, baseUrl?: string): string | null {
+  const imageKeys = [
+    "thumbnail", "image", "enclosure", "content", "group", "description", "summary",
+    "image_url", "imageUrl", "urlToImage", "image_href", "srcset", "poster",
+    "content:encoded", "media:thumbnail", "media:content", "itunes:image"
+  ];
+  const urlKeys = ["@_url", "@_href", "@_src", "url", "href", "src", "image_url", "imageUrl", "urlToImage", "poster"];
+
+  const normalize = (rawValue: unknown): string | null => {
+    let raw = text(rawValue).trim();
+    if (!raw) return null;
+    raw = raw.replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&#39;/g, "'");
+    // Some feeds provide srcset rather than src; use the first candidate.
+    raw = raw.split(",")[0].trim().split(/\s+/)[0];
+    if (raw.startsWith("//")) raw = "https:" + raw;
+    try {
+      const resolved = baseUrl ? new URL(raw, baseUrl) : new URL(raw);
+      if (resolved.protocol !== "https:" && resolved.protocol !== "http:") return null;
+      return resolved.href;
+    } catch {
+      return null;
+    }
+  };
+
+  const fromHtml = (rawValue: string): string | null => {
+    const raw = rawValue
+      .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"').replace(/&#39;/g, "'");
+    const tags = raw.match(/<(?:img|source|video)\b[^>]*>/gi) || [];
+    for (const tag of tags) {
+      const attr = tag.match(/\b(?:src|data-src|data-lazy-src|data-original|data-original-src|poster|srcset)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+      const candidate = attr ? (attr[1] || attr[2] || attr[3]) : "";
+      const url = normalize(candidate);
+      if (url) return url;
+    }
+    return null;
+  };
+
+  const inspect = (value: unknown, depth = 0): string | null => {
+    if (depth > 5 || value === null || value === undefined) return null;
+    if (typeof value === "string") {
+      const direct = normalize(value);
+      if (direct && /\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(direct)) return direct;
+      return fromHtml(value);
+    }
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        const found = inspect(child, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof value === "object") {
+      const obj = value as Record<string, unknown>;
+      for (const key of urlKeys) {
+        const candidate = obj[key];
+        if (candidate !== undefined && candidate !== null) {
+          const url = normalize(candidate);
+          if (url) return url;
+        }
+      }
+      if (typeof obj["#text"] === "string") {
+        const found = fromHtml(String(obj["#text"]));
+        if (found) return found;
+      }
+      for (const key of imageKeys) {
+        if (obj[key] !== undefined) {
+          const found = inspect(obj[key], depth + 1);
+          if (found) return found;
+        }
       }
     }
+    return null;
+  };
+
+  for (const key of imageKeys) {
+    if (item[key] !== undefined) {
+      const found = inspect(item[key]);
+      if (found) return found;
+    }
+  }
+  // Final fallback for embedded image markup in publisher-provided text.
+  for (const key of ["content:encoded", "description", "summary", "content"]) {
+    const found = inspect(item[key]);
+    if (found) return found;
   }
   return null;
 }
@@ -127,6 +363,209 @@ async function sourceIdFor(env: Env, source: string) {
   return row ? String(row.id) : source;
 }
 
+async function emergencyRssStories() {
+  const results = await Promise.allSettled(EMERGENCY_RSS_SOURCES.map(async source => ({
+    source,
+    items: await parseFeed(source)
+  })));
+  const seen = new Set<string>();
+  const stories: any[] = [];
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const { source, items } = result.value;
+    for (const item of items) {
+      const key = String(item.url || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const hash = (await sha(key)).slice(0, 24);
+      stories.push({
+        id: "feed-" + hash,
+        slug: "live-" + slugify(source.slug + "-" + item.title).slice(0, 86) + "-" + hash.slice(0, 8),
+        title: String(item.title || "").slice(0, 800),
+        excerpt: String(item.summary || "").slice(0, 5000),
+        ai_summary: String(item.summary || "").slice(0, 5000),
+        content: String(item.content || item.summary || "").slice(0, 20000),
+        featured_image_url: item.image || null,
+        original_url: item.url,
+        published_at: item.published || new Date().toISOString(),
+        created_at: item.published || new Date().toISOString(),
+        updated_at: item.published || new Date().toISOString(),
+        source_updated_at: item.published || new Date().toISOString(),
+        country: source.country,
+        view_count: 0,
+        auto_tags: [],
+        news_sources: { name: source.name, slug: source.slug },
+        categories: { name: source.default_category, slug: slugify(source.default_category) },
+        is_live_rss_fallback: true
+      });
+    }
+  }
+  stories.sort((a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime());
+  return stories;
+}
+
+async function publicEmergencyRssNews(request: Request, sourceMode: "live-rss" | "live-rss-fallback" = "live-rss-fallback") {
+  const url = new URL(request.url);
+  const limit = safeLimit(url.searchParams.get("limit"));
+  const offset = Math.max(0, Math.min(1000000, Number(url.searchParams.get("offset") || 0) || 0));
+  const category = String(url.searchParams.get("category") || "").trim().toLowerCase();
+  const source = String(url.searchParams.get("source") || "").trim().toLowerCase();
+  const query = String(url.searchParams.get("q") || url.searchParams.get("search") || "").trim().toLowerCase();
+  const view = String(url.searchParams.get("view") || "latest").toLowerCase();
+  let stories = await emergencyRssStories();
+  if (category) stories = stories.filter(item => item.categories?.slug === slugify(category) || String(item.categories?.name || "").toLowerCase() === category || (category === "world" && ["world", "international"].includes(String(item.categories?.name || "").toLowerCase())));
+  if (source) stories = stories.filter(item => item.news_sources?.slug === source || String(item.news_sources?.name || "").toLowerCase() === source);
+  if (query) stories = stories.filter(item => (item.title + " " + item.excerpt + " " + item.content).toLowerCase().includes(query));
+  const now = Date.now();
+  if (view === "today") stories = stories.filter(item => now - new Date(item.published_at).getTime() < 24 * 60 * 60 * 1000);
+  if (view === "week") stories = stories.filter(item => now - new Date(item.published_at).getTime() < 7 * 24 * 60 * 60 * 1000);
+  const page = stories.slice(offset, offset + limit);
+  if (!page.length && !stories.length) {
+    return json({ data: [], total: 0, offset, limit, hasMore: false, sourceMode: "rss-unavailable", error: "The database is temporarily unavailable and publisher RSS feeds could not be reached." }, 503);
+  }
+  return json({
+    data: page,
+    total: stories.length,
+    totalExact: true,
+    hasMore: offset + page.length < stories.length,
+    offset,
+    limit,
+    sourceMode,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+const MARKET_CRYPTO_SYMBOLS = [
+  { symbol: "BTCUSDT", ticker: "BTC", name: "Bitcoin" },
+  { symbol: "ETHUSDT", ticker: "ETH", name: "Ethereum" },
+  { symbol: "BNBUSDT", ticker: "BNB", name: "BNB" },
+  { symbol: "SOLUSDT", ticker: "SOL", name: "Solana" },
+  { symbol: "XRPUSDT", ticker: "XRP", name: "XRP" },
+  { symbol: "DOGEUSDT", ticker: "DOGE", name: "Dogecoin" },
+  { symbol: "ADAUSDT", ticker: "ADA", name: "Cardano" }
+];
+
+async function readJsonFromMarketApi(url: string, timeoutMs = 8000): Promise<any> {
+  const response = await fetch(url, {
+    headers: { accept: "application/json", "user-agent": "LK-Newsroom-Markets/1.0" },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) throw new Error("Market provider returned HTTP " + response.status);
+  return response.json();
+}
+
+async function liveExchangeRates() {
+  const payload = await readJsonFromMarketApi("https://open.er-api.com/v6/latest/USD");
+  if (payload?.result !== "success" || !payload?.rates || typeof payload.rates !== "object") {
+    throw new Error("Exchange-rate provider returned an invalid payload.");
+  }
+  return {
+    base: "USD",
+    base_code: "USD",
+    rates: payload.rates,
+    date: payload.time_last_update_utc || payload.time_last_update_unix || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    source: "ExchangeRate-API"
+  };
+}
+
+async function liveCryptoPrices() {
+  const symbols = MARKET_CRYPTO_SYMBOLS.map(item => item.symbol);
+  const encoded = encodeURIComponent(JSON.stringify(symbols));
+  let payload: any;
+  let firstError: unknown = null;
+  for (const base of ["https://data-api.binance.vision", "https://api.binance.com"]) {
+    try {
+      payload = await readJsonFromMarketApi(base + "/api/v3/ticker/24hr?symbols=" + encoded, 8000);
+      if (Array.isArray(payload)) break;
+      throw new Error("Crypto provider returned an invalid ticker list.");
+    } catch (error) {
+      firstError = error;
+    }
+  }
+  if (!Array.isArray(payload)) throw firstError || new Error("Crypto prices are unavailable.");
+  const bySymbol = new Map<string, any>(payload.map((item: any) => [String(item.symbol || ""), item]));
+  const items = MARKET_CRYPTO_SYMBOLS.flatMap(meta => {
+    const quote = bySymbol.get(meta.symbol);
+    if (!quote) return [];
+    const price = Number(quote.lastPrice);
+    const changePercent = Number(quote.priceChangePercent);
+    return [{
+      ...meta,
+      price,
+      priceUsd: price,
+      lastPrice: price,
+      changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+      change24h: Number.isFinite(changePercent) ? changePercent : 0,
+      priceChange: Number(quote.priceChange || 0),
+      high24h: Number(quote.highPrice || 0),
+      low24h: Number(quote.lowPrice || 0),
+      volume24h: Number(quote.quoteVolume || 0),
+      source: "Binance",
+      updatedAt: new Date().toISOString()
+    }];
+  });
+  if (!items.length) throw new Error("Crypto provider returned no configured symbols.");
+  return items;
+}
+
+async function publicMarketsOverview(origin: string) {
+  const [fxResult, cryptoResult] = await Promise.allSettled([liveExchangeRates(), liveCryptoPrices()]);
+  const fx = fxResult.status === "fulfilled" ? fxResult.value : null;
+  const coins = cryptoResult.status === "fulfilled" ? cryptoResult.value : [];
+  const errors: Record<string, string> = {};
+  if (fxResult.status === "rejected") errors.fx = fxResult.reason instanceof Error ? fxResult.reason.message : String(fxResult.reason);
+  if (cryptoResult.status === "rejected") errors.crypto = cryptoResult.reason instanceof Error ? cryptoResult.reason.message : String(cryptoResult.reason);
+  if (!fx && !coins.length) {
+    return json({
+      status: "unavailable",
+      sourceMode: "live-provider-unavailable",
+      updatedAt: new Date().toISOString(),
+      fx: null,
+      exchangeRates: null,
+      rates: null,
+      crypto: { source: "Binance", data: [], items: [], coins: [], updatedAt: null },
+      cryptoPrices: [],
+      cryptocurrencies: [],
+      data: { fx: null, exchangeRates: null, rates: null, crypto: [], cryptoPrices: [], cryptocurrencies: [] },
+      errors
+    }, 503, origin);
+  }
+  const crypto = { source: "Binance", data: coins, items: coins, coins, updatedAt: new Date().toISOString() };
+  const data = {
+    fx,
+    forex: fx,
+    exchangeRates: fx,
+    rates: fx?.rates || null,
+    crypto: coins,
+    cryptoPrices: coins,
+    cryptocurrencies: coins,
+    updatedAt: new Date().toISOString()
+  };
+  return json({
+    status: fx && coins.length ? "ok" : "partial",
+    sourceMode: "live-provider",
+    updatedAt: new Date().toISOString(),
+    fx,
+    forex: fx,
+    exchangeRates: fx,
+    rates: fx?.rates || null,
+    crypto,
+    cryptoPrices: coins,
+    cryptocurrencies: coins,
+    data,
+    errors: Object.keys(errors).length ? errors : undefined
+  }, 200, origin);
+}
+
+async function publicEmergencyRssArticle(identifier: string) {
+  const stories = await emergencyRssStories();
+  const article = stories.find(item => item.id === identifier);
+  if (!article) return json({ error: "This live publisher story is no longer in the current RSS feed." }, 404);
+  const related = stories.filter(item => item.id !== identifier && item.categories?.slug === article.categories?.slug).slice(0, 6);
+  return json({ data: article, related, moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] });
+}
+
 async function publicNews(request: Request, env: Env) {
   const u = new URL(request.url);
   const limit = safeLimit(u.searchParams.get("limit"));
@@ -155,15 +594,33 @@ async function publicNews(request: Request, env: Env) {
   }
   const where = " WHERE " + filters.join(" AND ");
   const sortOrder = view === "trending" || view === "most-read" ? "a.view_count DESC, COALESCE(a.published_at,a.created_at) DESC" : "COALESCE(a.published_at,a.created_at) DESC";
-  const rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY " + sortOrder + " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
-    .bind(...args, limit, offset).all();
-  const count = await env.DB.prepare("SELECT COUNT(*) AS total FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id" + where)
-    .bind(...args).first();
-  return json({ data: (rows.results || []).map((r: any) => packArticle(r)), total: Number(count?.total || 0), offset, limit, updatedAt: new Date().toISOString() });
+  let rows: any;
+  try {
+    rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY " + sortOrder + " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
+      .bind(...args, limit, offset).all();
+  } catch (error) {
+    console.error("D1 public news read failed; serving live publisher RSS fallback.", error instanceof Error ? error.message : String(error));
+    return publicEmergencyRssNews(request);
+  }
+  const seenUrls = new Set<string>();
+  const uniqueRows = ((rows.results || []) as any[]).filter((row: any) => {
+    const canonicalUrl = canonicalArticleUrl(row.original_url);
+    if (!canonicalUrl) return true;
+    if (seenUrls.has(canonicalUrl)) return false;
+    seenUrls.add(canonicalUrl);
+    return true;
+  });
+  const data = uniqueRows.map((r: any) => packArticle(r));
+  // Avoid a full COUNT(*) scan of ~25k+ articles on every page view. The
+  // existing Load More UI only needs a forward-pagination signal here.
+  const hasMore = (rows.results || []).length >= limit;
+  const paginationTotal = offset + data.length + (hasMore ? 1 : 0);
+  return json({ data, total: paginationTotal, totalExact: false, hasMore, offset, limit, updatedAt: new Date().toISOString() });
 }
 
-async function publicArticle(identifier: string, env: Env) {
+async function publicArticleFromD1(identifier: string, env: Env) {
   const id = decodeURIComponent(identifier);
+  if (/^feed-[a-f0-9]{24}$/i.test(id)) return publicEmergencyRssArticle(id);
   const by = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? "a.id=?1" : "a.slug=?1";
   const row = await articleQuery(env, " WHERE " + by + " AND a.status='published' AND a.duplicate_of IS NULL").bind(id).first();
   if (!row) return json({ error: "Article not found" }, 404);
@@ -179,7 +636,7 @@ async function publicArticle(identifier: string, env: Env) {
     env.DB.prepare("SELECT id,title,description,video_url,youtube_url,thumbnail_url,duration_seconds,published_at FROM videos WHERE article_id=?1 AND status='published' ORDER BY published_at DESC LIMIT 6").bind(row.id).all(),
     env.DB.prepare("SELECT id,display_name,body,created_at FROM comments WHERE article_id=?1 AND status='approved' ORDER BY created_at DESC LIMIT 50").bind(row.id).all()
   ]);
-  return json({
+  const payload = {
     data: article,
     related: (related.results || []).map((r: any) => packArticle(r)),
     moreFromSource: (more.results || []).map((r: any) => packArticle(r)),
@@ -188,7 +645,24 @@ async function publicArticle(identifier: string, env: Env) {
     gallery: gallery.results || [],
     videos: videos.results || [],
     comments: comments.results || []
-  });
+  };
+  await writeArticleCache(env, String(article.id), payload);
+  return json(payload);
+}
+
+async function publicArticle(identifier: string, env: Env) {
+  const id = decodeURIComponent(identifier);
+  if (/^feed-[a-f0-9]{24}$/i.test(id)) return publicEmergencyRssArticle(id);
+  try {
+    return await publicArticleFromD1(identifier, env);
+  } catch (error) {
+    console.error("D1 article read failed; trying the R2 article cache and live publisher feeds.", error instanceof Error ? error.message : String(error));
+    const cached = await readArticleCache(env, id);
+    if (cached) return json(cached);
+    // Feed-backed IDs are self-contained and never require D1. For legacy
+    // uncached records, return a useful error rather than the generic Worker 503.
+    return json({ error: "This stored article is not in the R2 backup cache yet, and D1 is temporarily unavailable. Current publisher feeds are still available.", d1Unavailable: true }, 503);
+  }
 }
 
 async function publicCategories(slug: string, env: Env) {
@@ -216,6 +690,13 @@ function articleShellPath(url: URL, path: string) {
 }
 async function serveAssets(request: Request, env: Env) {
   const url = new URL(request.url);
+  if (!env.ASSETS || typeof env.ASSETS.fetch !== "function") {
+    console.error("LK Newsroom static asset binding ASSETS is missing; check wrangler.jsonc assets.binding.");
+    return new Response("LK Newsroom static assets are not configured. Redeploy with assets.binding set to ASSETS.", {
+      status: 503,
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
+    });
+  }
   if (url.pathname === "/news" || url.pathname.startsWith("/news/")) return env.ASSETS.fetch(articleShellPath(url, "/pages/article.html"));
   if (url.pathname.startsWith("/category/")) return env.ASSETS.fetch(articleShellPath(url, "/pages/category.html"));
   return env.ASSETS.fetch(request);
@@ -265,7 +746,7 @@ async function parseFeed(source: any): Promise<any[]> {
     const content = cleanHtml(item["content:encoded"] || item.encoded || item.content || item.description);
     const published = safeDate(item.pubDate || item.published || item.updated || item.date);
     const external = text(item.guid || item.id || url).trim() || url || (title + "|" + published);
-    return { url, title, summary, content, published, external, image: imageOf(item) };
+    return { url, title, summary, content, published, external, image: imageOf(item, url) };
   }).filter((item: any) => item.title && item.url);
 }
 
@@ -344,20 +825,71 @@ async function fetchSourceEntries(source: any, env: Env): Promise<any[]> {
   throw new Error("Unsupported source type: " + String(source.source_type || "unknown"));
 }
 
+function canonicalArticleUrl(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    url.hash = "";
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (/^(utm_.+|fbclid|gclid|dclid|mc_cid|mc_eid|igshid|ref_src|ref_url)$/i.test(key)) url.searchParams.delete(key);
+    }
+    if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 async function upsertFeedArticles(env: Env, source: any, entries: any[], categoryId: string, categoryStatement: any) {
   if (!entries.length) {
     if (categoryStatement) await env.DB.batch([categoryStatement]);
     return { inserted: 0, updated: 0, skipped: 0 };
   }
-  const externalIds = Array.from(new Set(entries.map(item => String(item.external).slice(0, 1000))));
+
+  const normalizedEntries = entries.map(item => ({
+    ...item,
+    url: canonicalArticleUrl(item.url),
+    external: String(item.external || item.url || (item.title + "|" + item.published)).slice(0, 1000)
+  })).filter(item => item.url && item.title);
+  if (!normalizedEntries.length) {
+    if (categoryStatement) await env.DB.batch([categoryStatement]);
+    return { inserted: 0, updated: 0, skipped: entries.length };
+  }
+
+  const externalIds = Array.from(new Set(normalizedEntries.map(item => String(item.external).slice(0, 1000))));
+  const candidateUrls = Array.from(new Set(normalizedEntries.flatMap(item => {
+    const raw = String(item.url || "").trim();
+    const canonical = canonicalArticleUrl(raw);
+    return [raw, canonical].filter(Boolean);
+  })));
   const externalPlaceholders = externalIds.map((_value, index) => "?" + (index + 2)).join(",");
-  const existingRows = await env.DB.prepare("SELECT id,external_id FROM articles WHERE source_id=?1 AND external_id IN (" + externalPlaceholders + ")")
-    .bind(source.id, ...externalIds).all();
+  const urlStart = externalIds.length + 2;
+  const urlPlaceholders = candidateUrls.map((_value, index) => "?" + (urlStart + index)).join(",");
+  const lookupConditions = ["(source_id=?1 AND external_id IN (" + externalPlaceholders + "))"];
+  if (candidateUrls.length) lookupConditions.push("original_url IN (" + urlPlaceholders + ")");
+  const existingRows = await env.DB.prepare("SELECT id,external_id,original_url,source_id FROM articles WHERE " + lookupConditions.join(" OR "))
+    .bind(source.id, ...externalIds, ...candidateUrls).all();
+
   const existingByExternal = new Map<string, string>();
-  for (const row of (existingRows.results || []) as any[]) existingByExternal.set(String(row.external_id), String(row.id));
+  const existingByUrl = new Map<string, string>();
+  const crossSourceUrls = new Set<string>();
+  for (const row of (existingRows.results || []) as any[]) {
+    const external = String(row.external_id || "");
+    const canonicalUrl = canonicalArticleUrl(row.original_url);
+    if (String(row.source_id) === String(source.id)) {
+      if (external) existingByExternal.set(external, String(row.id));
+      if (canonicalUrl) existingByUrl.set(canonicalUrl, String(row.id));
+    } else if (canonicalUrl) {
+      // A story already stored under another publisher URL must not be inserted
+      // again merely because a syndicated feed uses a different GUID.
+      crossSourceUrls.add(canonicalUrl);
+    }
+  }
 
   const hashesByExternal = new Map<string, string>();
-  for (const item of entries) hashesByExternal.set(String(item.external).slice(0, 1000), await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim()));
+  for (const item of normalizedEntries) hashesByExternal.set(String(item.external).slice(0, 1000), await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim()));
   const hashes = Array.from(new Set(Array.from(hashesByExternal.values())));
   const externalHashes = hashes.length ? await env.DB.prepare("SELECT content_hash,source_id FROM articles WHERE content_hash IN (" + hashes.map((_value, index) => "?" + (index + 1)).join(",") + ")")
     .bind(...hashes).all() : { results: [] };
@@ -370,28 +902,32 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
   if (categoryStatement) statements.push(categoryStatement);
   let inserted = 0, updated = 0, skipped = 0;
   const seenThisRun = new Set<string>();
-  for (const item of entries) {
+  for (const item of normalizedEntries) {
     const external = String(item.external).slice(0, 1000);
+    const url = canonicalArticleUrl(item.url);
     const hash = hashesByExternal.get(external) || await sha((item.title + " " + item.summary).toLowerCase().replace(/\s+/g, " ").trim());
-    if (crossSourceHashes.has(hash) || seenThisRun.has(source.slug + "|" + external)) {
+    const runKey = source.slug + "|url:" + url;
+    if (crossSourceUrls.has(url) || crossSourceHashes.has(hash) || seenThisRun.has(runKey) || seenThisRun.has(source.slug + "|external:" + external)) {
       skipped++;
       continue;
     }
-    seenThisRun.add(source.slug + "|" + external);
-    const existingId = existingByExternal.get(external);
+    seenThisRun.add(runKey);
+    seenThisRun.add(source.slug + "|external:" + external);
+    const existingId = existingByExternal.get(external) || existingByUrl.get(url);
     const id = existingId || crypto.randomUUID();
-    const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(external)).slice(0, 8));
+    // URL-based slugs remain stable if a publisher changes its item GUID.
+    const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(url)).slice(0, 8));
     const now = new Date().toISOString();
     const isBreaking = breakingTerms.test(item.title + " " + item.summary) ? 1 : 0;
     statements.push(
-      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'published',?8,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,published_at=excluded.published_at,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
-        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 5000), item.content.slice(0, 20000), item.image, item.url, isBreaking, item.published, now, categoryId, source.id, external, source.country, hash),
+      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'published',?8,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,external_id=excluded.external_id,published_at=excluded.published_at,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
+        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 5000), item.content.slice(0, 20000), item.image, url, isBreaking, item.published, now, categoryId, source.id, external, source.country, hash),
       env.DB.prepare("INSERT INTO live_updates(id,article_id,title,body,kind,pinned,published_at,created_at) VALUES (?1,?2,?3,?4,?5,0,?6,?7) ON CONFLICT(article_id) DO UPDATE SET title=excluded.title,body=excluded.body,kind=excluded.kind,published_at=excluded.published_at")
         .bind(crypto.randomUUID(), id, item.title.slice(0, 800), item.summary.slice(0, 5000), isBreaking ? "breaking" : "news", item.published, now)
     );
     if (isBreaking) {
       statements.push(env.DB.prepare("INSERT INTO breaking_news(id,article_id,source_id,headline,link_url,active,pinned,starts_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,1,0,?6,?7,?7) ON CONFLICT(article_id) DO UPDATE SET headline=excluded.headline,link_url=excluded.link_url,active=1,starts_at=excluded.starts_at")
-        .bind(crypto.randomUUID(), id, source.id, item.title.slice(0, 800), item.url, item.published, now));
+        .bind(crypto.randomUUID(), id, source.id, item.title.slice(0, 800), url, item.published, now));
     }
     if (existingId) updated++; else inserted++;
   }
@@ -1477,8 +2013,17 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/health" || path === "/v1/health") {
     try {
       await env.DB.prepare("SELECT 1 AS ok").first();
-      const last = await env.DB.prepare("SELECT status,started_at,completed_at FROM worker_runs ORDER BY started_at DESC LIMIT 1").first();
-      return json({ status: "ok", service: "lk-newsroom-cloudflare", updatedAt: new Date().toISOString(), worker: last || null }, 200, origin);
+      const [last, sourceCount] = await Promise.all([
+        env.DB.prepare("SELECT status,started_at,completed_at,fetched,added,updated,skipped,errors,error FROM worker_runs ORDER BY started_at DESC LIMIT 1").first(),
+        env.DB.prepare("SELECT COUNT(*) AS enabled FROM news_sources WHERE enabled=1").first()
+      ]);
+      return json({
+        status: "ok",
+        service: "lk-newsroom-cloudflare",
+        updatedAt: new Date().toISOString(),
+        enabledSources: Number(sourceCount?.enabled || 0),
+        worker: last || null
+      }, 200, origin);
     } catch (e) {
       return json({ status: "error", error: String(e) }, 503, origin);
     }
@@ -1546,15 +2091,22 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/monetization/checkout" && request.method === "POST") return beginCheckout(request, env, origin);
   const paymentMatch = path.match(/^\/v1\/monetization\/payments\/([^/]+)$/);
   if (paymentMatch && request.method === "GET") return verifyPayment(decodeURIComponent(paymentMatch[1]), env, origin);
-  if (path === "/v1/advertisements" && request.method === "GET") {
-    const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
-    const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR datetime(starts_at)<=datetime('now')) AND (ends_at IS NULL OR datetime(ends_at)>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
-    return json({ data: rows.results || [] }, 200, origin);
+  if (path === "/v1/markets/overview" && request.method === "GET") {
+    // Market data is sourced directly from public providers, never from D1.
+    return withPublicCache(request, 20, 1800, () => publicMarketsOverview(origin));
   }
-  if (path === "/v1/news" && request.method === "GET") return publicNews(request, env);
-  if (path === "/v1/breaking" && request.method === "GET") return publicBreaking(env);
-  if (path === "/v1/videos" && request.method === "GET") return publicVideos(env, url);
-  if (path.startsWith("/v1/categories/") && request.method === "GET") return publicCategories(path.slice("/v1/categories/".length), env);
+  if (path === "/v1/advertisements" && request.method === "GET") {
+    return withPublicCache(request, 300, 86400, async () => {
+      const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
+      const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR datetime(starts_at)<=datetime('now')) AND (ends_at IS NULL OR datetime(ends_at)>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
+      return json({ data: rows.results || [] }, 200, origin);
+    });
+  }
+  if (path === "/v1/news/live" && request.method === "GET") return withPublicCache(request, 45, 600, () => publicEmergencyRssNews(request, "live-rss"));
+  if (path === "/v1/news" && request.method === "GET") return withPublicCache(request, 90, 86400, () => publicNews(request, env));
+  if (path === "/v1/breaking" && request.method === "GET") return withPublicCache(request, 60, 86400, () => publicBreaking(env));
+  if (path === "/v1/videos" && request.method === "GET") return withPublicCache(request, 300, 86400, () => publicVideos(env, url));
+  if (path.startsWith("/v1/categories/") && request.method === "GET") return withPublicCache(request, 900, 86400, () => publicCategories(path.slice("/v1/categories/".length), env));
   const commentMatch = path.match(/^\/v1\/news\/([^/]+)\/comments$/);
   if (commentMatch && request.method === "POST") {
     try {
@@ -1587,7 +2139,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: changes > 0 }, 202, origin);
   }
   const newsMatch = path.match(/^\/v1\/news\/([^/]+)$/);
-  if (newsMatch && request.method === "GET") return publicArticle(newsMatch[1], env);
+  if (newsMatch && request.method === "GET") return withPublicCache(request, 120, 86400, () => publicArticle(newsMatch[1], env));
   if (path === "/v1/newsletter" && request.method === "POST") {
     try {
       const body = await request.json() as any;
@@ -1616,6 +2168,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/analytics/advertisements" && request.method === "POST") {
     return json({ ok: false, error: "Advertisement analytics migration is pending." }, 501, origin);
   }
+  // Never send unknown API routes to the static asset router; otherwise a
+  // missing ASSETS binding turns a simple missing endpoint into a Worker 503.
+  if (path.startsWith("/v1/") || path.startsWith("/api/")) {
+    return json({ error: "API endpoint not found.", path }, 404, origin);
+  }
   return serveAssets(request, env);
 }
 
@@ -1628,7 +2185,12 @@ export default {
       return json({ error: "LK Newsroom is temporarily unavailable." }, 503, env.PUBLIC_ORIGIN || new URL(request.url).origin);
     }
   },
-  async scheduled(_event: any, env: Env, ctx: any) {
-    ctx.waitUntil(runFeedSync(env));
+  async scheduled(event: any, env: Env, ctx: any) {
+    // Keep source ingestion on its existing five-minute cadence even though
+    // the R2 article-cache backfill runs each minute after D1 quota is restored.
+    const scheduledAt = Number(event?.scheduledTime || Date.now());
+    const minuteSlot = Math.floor(scheduledAt / 60000);
+    if (minuteSlot % 5 === 0) ctx.waitUntil(runFeedSync(env));
+    ctx.waitUntil(runArticleCacheBackfill(env));
   }
 };
