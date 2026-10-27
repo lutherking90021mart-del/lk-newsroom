@@ -69,8 +69,9 @@ async function withPublicCache(
   staleSeconds: number,
   loader: () => Promise<Response>
 ): Promise<Response> {
-  let cache: Cache;
-  try { cache = caches.default; } catch { return loader(); }
+  const edgeCaches = (globalThis as unknown as { caches?: { default?: Cache } }).caches;
+  const cache = edgeCaches?.default;
+  if (!cache) return loader();
   const makeKey = (kind: "fresh" | "stale") => {
     const keyUrl = new URL(request.url);
     keyUrl.searchParams.set("__lk_edge_cache", kind);
