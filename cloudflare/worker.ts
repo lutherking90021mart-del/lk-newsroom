@@ -146,12 +146,15 @@ async function runArticleCacheBackfill(env: Env) {
   // Warm a small batch of existing published articles into R2 on each cron
   // run. D1 is read-only here; public detail requests can then use R2 during
   // a future D1 quota outage.
-  const batchSize = 80;
+  // Stay below the Workers Free 50-subrequest invocation limit: 45 R2 writes +
+  // one D1 query + R2 state read/write. The job advances by ID, so it is resumable.
+  const batchSize = 45;
   let state: any = { cursor: "", complete: false };
   try {
     const storedState = await env.MEDIA.get(ARTICLE_CACHE_BACKFILL_STATE);
     if (storedState) state = { ...state, ...JSON.parse(await storedState.text()) };
     if (state.complete) return;
+    if (Number(state.retryAt || 0) > Date.now()) return;
     const result = await env.DB.prepare("SELECT " + articleSelect + articleJoin + " WHERE a.id>?1 AND a.status='published' AND a.duplicate_of IS NULL ORDER BY a.id LIMIT ?2")
       .bind(String(state.cursor || ""), batchSize).all();
     const rows = (result.results || []) as any[];
@@ -162,12 +165,19 @@ async function runArticleCacheBackfill(env: Env) {
       console.log("LK article cache backfill completed.");
       return;
     }
-    const writes = await Promise.all(rows.map(async row => {
-      const article = packArticle(row);
-      const payload = { data: article, related: [], moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] };
-      return writeArticleCache(env, String(article.id), payload);
-    }));
-    if (writes.some(ok => !ok)) {
+    let writeFailure = false;
+    // Keep only five R2 writes in flight at once; the Free plan allows six
+    // simultaneously opening outbound connections per Worker invocation.
+    for (let offset = 0; offset < rows.length; offset += 5) {
+      const group = rows.slice(offset, offset + 5);
+      const writes = await Promise.all(group.map(async row => {
+        const article = packArticle(row);
+        const payload = { data: article, related: [], moreFromSource: [], previous: null, next: null, gallery: [], videos: [], comments: [] };
+        return writeArticleCache(env, String(article.id), payload);
+      }));
+      if (writes.some(ok => !ok)) writeFailure = true;
+    }
+    if (writeFailure) {
       console.warn("R2 article cache batch had write failures; retrying this cursor batch on the next cron run.");
       return;
     }
@@ -179,9 +189,15 @@ async function runArticleCacheBackfill(env: Env) {
     await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } });
     console.log("LK article cache backfill batch:", JSON.stringify({ cursor: state.cursor, cached: state.cached, complete: state.complete }));
   } catch (error) {
-    // When D1 has reached the Free-plan daily limit, skip backfill without
-    // disturbing the already-serving public RSS and R2 cache paths.
-    console.warn("LK article cache backfill paused:", error instanceof Error ? error.message : String(error));
+    // When D1 has reached the Free-plan daily limit, pause this background
+    // job until midnight UTC instead of hammering the exhausted database.
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn("LK article cache backfill paused:", message);
+    state.lastError = message.slice(0, 500);
+    state.retryAt = /daily row read limit|daily row write limit/i.test(message)
+      ? (Math.floor(Date.now() / 86400000) + 1) * 86400000
+      : Date.now() + 10 * 60 * 1000;
+    await env.MEDIA.put(ARTICLE_CACHE_BACKFILL_STATE, JSON.stringify(state), { httpMetadata: { contentType: "application/json" } }).catch(() => undefined);
   }
 }
 
@@ -2168,8 +2184,12 @@ export default {
       return json({ error: "LK Newsroom is temporarily unavailable." }, 503, env.PUBLIC_ORIGIN || new URL(request.url).origin);
     }
   },
-  async scheduled(_event: any, env: Env, ctx: any) {
-    ctx.waitUntil(runFeedSync(env));
+  async scheduled(event: any, env: Env, ctx: any) {
+    // Keep source ingestion on its existing five-minute cadence even though
+    // the R2 article-cache backfill runs each minute after D1 quota is restored.
+    const scheduledAt = Number(event?.scheduledTime || Date.now());
+    const minuteSlot = Math.floor(scheduledAt / 60000);
+    if (minuteSlot % 5 === 0) ctx.waitUntil(runFeedSync(env));
     ctx.waitUntil(runArticleCacheBackfill(env));
   }
 };
