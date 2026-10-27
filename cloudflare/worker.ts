@@ -348,6 +348,129 @@ async function publicEmergencyRssNews(request: Request) {
   });
 }
 
+const MARKET_CRYPTO_SYMBOLS = [
+  { symbol: "BTCUSDT", ticker: "BTC", name: "Bitcoin" },
+  { symbol: "ETHUSDT", ticker: "ETH", name: "Ethereum" },
+  { symbol: "BNBUSDT", ticker: "BNB", name: "BNB" },
+  { symbol: "SOLUSDT", ticker: "SOL", name: "Solana" },
+  { symbol: "XRPUSDT", ticker: "XRP", name: "XRP" },
+  { symbol: "DOGEUSDT", ticker: "DOGE", name: "Dogecoin" },
+  { symbol: "ADAUSDT", ticker: "ADA", name: "Cardano" }
+];
+
+async function readJsonFromMarketApi(url: string, timeoutMs = 8000): Promise<any> {
+  const response = await fetch(url, {
+    headers: { accept: "application/json", "user-agent": "LK-Newsroom-Markets/1.0" },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!response.ok) throw new Error("Market provider returned HTTP " + response.status);
+  return response.json();
+}
+
+async function liveExchangeRates() {
+  const payload = await readJsonFromMarketApi("https://open.er-api.com/v6/latest/USD");
+  if (payload?.result !== "success" || !payload?.rates || typeof payload.rates !== "object") {
+    throw new Error("Exchange-rate provider returned an invalid payload.");
+  }
+  return {
+    base: "USD",
+    base_code: "USD",
+    rates: payload.rates,
+    date: payload.time_last_update_utc || payload.time_last_update_unix || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    source: "ExchangeRate-API"
+  };
+}
+
+async function liveCryptoPrices() {
+  const symbols = MARKET_CRYPTO_SYMBOLS.map(item => item.symbol);
+  const encoded = encodeURIComponent(JSON.stringify(symbols));
+  let payload: any;
+  let firstError: unknown = null;
+  for (const base of ["https://data-api.binance.vision", "https://api.binance.com"]) {
+    try {
+      payload = await readJsonFromMarketApi(base + "/api/v3/ticker/24hr?symbols=" + encoded, 8000);
+      if (Array.isArray(payload)) break;
+      throw new Error("Crypto provider returned an invalid ticker list.");
+    } catch (error) {
+      firstError = error;
+    }
+  }
+  if (!Array.isArray(payload)) throw firstError || new Error("Crypto prices are unavailable.");
+  const bySymbol = new Map<string, any>(payload.map((item: any) => [String(item.symbol || ""), item]));
+  const items = MARKET_CRYPTO_SYMBOLS.flatMap(meta => {
+    const quote = bySymbol.get(meta.symbol);
+    if (!quote) return [];
+    const price = Number(quote.lastPrice);
+    const changePercent = Number(quote.priceChangePercent);
+    return [{
+      ...meta,
+      price,
+      priceUsd: price,
+      lastPrice: price,
+      changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+      change24h: Number.isFinite(changePercent) ? changePercent : 0,
+      priceChange: Number(quote.priceChange || 0),
+      high24h: Number(quote.highPrice || 0),
+      low24h: Number(quote.lowPrice || 0),
+      volume24h: Number(quote.quoteVolume || 0),
+      source: "Binance",
+      updatedAt: new Date().toISOString()
+    }];
+  });
+  if (!items.length) throw new Error("Crypto provider returned no configured symbols.");
+  return items;
+}
+
+async function publicMarketsOverview(origin: string) {
+  const [fxResult, cryptoResult] = await Promise.allSettled([liveExchangeRates(), liveCryptoPrices()]);
+  const fx = fxResult.status === "fulfilled" ? fxResult.value : null;
+  const coins = cryptoResult.status === "fulfilled" ? cryptoResult.value : [];
+  const errors: Record<string, string> = {};
+  if (fxResult.status === "rejected") errors.fx = fxResult.reason instanceof Error ? fxResult.reason.message : String(fxResult.reason);
+  if (cryptoResult.status === "rejected") errors.crypto = cryptoResult.reason instanceof Error ? cryptoResult.reason.message : String(cryptoResult.reason);
+  if (!fx && !coins.length) {
+    return json({
+      status: "unavailable",
+      sourceMode: "live-provider-unavailable",
+      updatedAt: new Date().toISOString(),
+      fx: null,
+      exchangeRates: null,
+      rates: null,
+      crypto: { source: "Binance", data: [], items: [], coins: [], updatedAt: null },
+      cryptoPrices: [],
+      cryptocurrencies: [],
+      data: { fx: null, exchangeRates: null, rates: null, crypto: [], cryptoPrices: [], cryptocurrencies: [] },
+      errors
+    }, 503, origin);
+  }
+  const crypto = { source: "Binance", data: coins, items: coins, coins, updatedAt: new Date().toISOString() };
+  const data = {
+    fx,
+    forex: fx,
+    exchangeRates: fx,
+    rates: fx?.rates || null,
+    crypto: coins,
+    cryptoPrices: coins,
+    cryptocurrencies: coins,
+    updatedAt: new Date().toISOString()
+  };
+  return json({
+    status: fx && coins.length ? "ok" : "partial",
+    sourceMode: "live-provider",
+    updatedAt: new Date().toISOString(),
+    fx,
+    forex: fx,
+    exchangeRates: fx,
+    rates: fx?.rates || null,
+    crypto,
+    cryptoPrices: coins,
+    cryptocurrencies: coins,
+    data,
+    errors: Object.keys(errors).length ? errors : undefined
+  }, 200, origin);
+}
+
 async function publicEmergencyRssArticle(identifier: string) {
   const stories = await emergencyRssStories();
   const article = stories.find(item => item.id === identifier);
@@ -1856,6 +1979,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/monetization/checkout" && request.method === "POST") return beginCheckout(request, env, origin);
   const paymentMatch = path.match(/^\/v1\/monetization\/payments\/([^/]+)$/);
   if (paymentMatch && request.method === "GET") return verifyPayment(decodeURIComponent(paymentMatch[1]), env, origin);
+  if (path === "/v1/markets/overview" && request.method === "GET") {
+    // Market data is sourced directly from public providers, never from D1.
+    return withPublicCache(request, 20, 1800, () => publicMarketsOverview(origin));
+  }
   if (path === "/v1/advertisements" && request.method === "GET") {
     return withPublicCache(request, 300, 86400, async () => {
       const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
