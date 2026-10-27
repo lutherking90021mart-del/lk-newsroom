@@ -66,39 +66,56 @@ function cacheNewsFeed(rows){
 async function hydrateNews(){
   newsLoading=true;
   try{
-    // The homepage no longer waits for this request, so do not abort a slow
-    // but valid response: the result can still replace cached stories later.
-    const endpoint=`${aggregatorApi()}/v1/news?limit=100`;
-    let livePayload=null;
-    let lastError=null;
-    for(let attempt=0;attempt<2;attempt++){
+    const fetchRows=async endpoint=>{
+      const controller=new AbortController();
+      const timeout=setTimeout(()=>controller.abort(),15000);
       try{
         const response=await fetch(endpoint,{
           cache:'no-store',
-          headers:{accept:'application/json'}
+          headers:{accept:'application/json'},
+          signal:controller.signal
         });
         if(!response.ok)throw new Error(`News API returned HTTP ${response.status}`);
         const payload=await response.json();
-        if(Array.isArray(payload.data)&&payload.data.length){
-          livePayload=payload.data;
-          break;
-        }
-        lastError=new Error('The news API returned an empty feed.');
-      }catch(error){lastError=error;}
-      if(attempt===0)await new Promise(resolve=>setTimeout(resolve,700));
+        return payload&&Array.isArray(payload.data)&&payload.data.length?payload:null;
+      }finally{clearTimeout(timeout);}
+    };
+
+    // Prefer the independent publisher endpoint. It does not query D1, so a
+    // D1 quota outage or a stale DB cache cannot hide today's RSS stories.
+    let payload=null;
+    let lastError=null;
+    const liveEndpoint=`${aggregatorApi()}/v1/news/live?limit=100`;
+    for(let attempt=0;attempt<2&&!payload;attempt++){
+      try{payload=await fetchRows(liveEndpoint);}
+      catch(error){lastError=error;}
+      if(!payload&&attempt===0)await new Promise(resolve=>setTimeout(resolve,700));
     }
-    if(livePayload){
-      feed=livePayload.map(toUiArticle);
-      cacheNewsFeed(livePayload);
+
+    // If publisher feeds are unreachable, fall back to the cached/D1 news API.
+    if(!payload){
+      try{payload=await fetchRows(`${aggregatorApi()}/v1/news?limit=100`);}
+      catch(error){lastError=error;}
+    }
+
+    if(payload){
+      const rows=payload.data;
+      feed=rows.map(toUiArticle).sort((a,b)=>{
+        const dateA=Date.parse(a.publishedAt||0)||0;
+        const dateB=Date.parse(b.publishedAt||0)||0;
+        return dateB-dateA;
+      });
+      cacheNewsFeed(rows);
+      if(payload.sourceMode)console.info('LK Newsroom feed source:',payload.sourceMode,'stories:',feed.length);
       return true;
     }
-    if(lastError)console.warn('Live news refresh did not return stories; preserving the last available feed.',lastError);
-    // If the public API fails or returns no stories, keep the last good feed.
+
+    if(lastError)console.warn('Live publisher and stored-news endpoints are unavailable; retaining the last saved feed.',lastError);
     if(configured){
       try{
         const rows=await newsApi.published({limit:100});
         if(rows?.length){
-          feed=rows.map(toUiArticle);
+          feed=rows.map(toUiArticle).sort((a,b)=>(Date.parse(b.publishedAt||0)||0)-(Date.parse(a.publishedAt||0)||0));
           cacheNewsFeed(rows);
           return true;
         }
