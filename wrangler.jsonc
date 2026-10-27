@@ -6,7 +6,7 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/v1/*", "/api/*", "/health", "/news/*", "/category/*", "/admin/*"]
+    "run_worker_first": ["/v1/*", "/api/*", "/health", "/news/*", "/category/*"]
   },
   "d1_databases": [
     {
