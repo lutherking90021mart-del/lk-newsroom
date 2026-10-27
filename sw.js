@@ -84,10 +84,17 @@ self.addEventListener('fetch',event=>{
   const isPublicStyle=/^\/styles\/[^/]+\.css$/i.test(url.pathname);
   const isPublicScript=/^(?:\/pwa-install\.js|\/js\/(?:app|components|data|config|sports-center|weather|ads|analytics|monetization-public|supabase-client)\.js)$/i.test(url.pathname);
   if(isPublicStyle||isPublicScript){
-    event.respondWith(fetch(request).then(response=>{
-      if(response.ok){
-        event.waitUntil(caches.open(LK_PUBLIC_CACHE).then(cache=>cache.put(request,response.clone())).catch(()=>{}));
+    event.respondWith(fetch(request).then(async response=>{
+      if(!response.ok)return response;
+      const contentType=String(response.headers.get('content-type')||'').toLowerCase();
+      const expectedType=isPublicStyle?contentType.includes('text/css'):(contentType.includes('javascript')||contentType.includes('ecmascript'));
+      if(!expectedType){
+        // Never overwrite a good cached stylesheet/module with an HTML error
+        // page returned as HTTP 200 by a broken asset route.
+        const cached=await caches.match(request,{ignoreSearch:true});
+        return cached||response;
       }
+      event.waitUntil(caches.open(LK_PUBLIC_CACHE).then(cache=>cache.put(request,response.clone())).catch(()=>{}));
       return response;
     }).catch(async()=>{
       // Query-string cache busts are ignored for the offline copy, because the
