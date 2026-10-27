@@ -38,6 +38,66 @@ function json(data: unknown, status = 200, origin = "*") {
     }
   });
 }
+function cachedClientResponse(response: Response, cacheState: "fresh" | "stale") {
+  const headers = new Headers(response.headers);
+  // Keep the browser from pinning a stale API response; only the Worker edge
+  // cache should retain it between requests.
+  headers.set("cache-control", "no-store");
+  headers.set("x-lk-news-cache", cacheState);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function withPublicCache(
+  request: Request,
+  freshSeconds: number,
+  staleSeconds: number,
+  loader: () => Promise<Response>
+): Promise<Response> {
+  let cache: Cache;
+  try { cache = caches.default; } catch { return loader(); }
+  const makeKey = (kind: "fresh" | "stale") => {
+    const keyUrl = new URL(request.url);
+    keyUrl.searchParams.set("__lk_edge_cache", kind);
+    return new Request(keyUrl.toString(), { method: "GET" });
+  };
+  const freshKey = makeKey("fresh");
+  const staleKey = makeKey("stale");
+  try {
+    const fresh = await cache.match(freshKey);
+    if (fresh) return cachedClientResponse(fresh, "fresh");
+  } catch {}
+  let stale: Response | undefined;
+  try { stale = (await cache.match(staleKey)) || undefined; } catch {}
+  try {
+    const response = await loader();
+    if (response.ok) {
+      const body = await response.clone().arrayBuffer();
+      const baseHeaders = new Headers(response.headers);
+      baseHeaders.delete("set-cookie");
+      const freshHeaders = new Headers(baseHeaders);
+      freshHeaders.set("cache-control", `public, max-age=${Math.max(1, freshSeconds)}`);
+      const staleHeaders = new Headers(baseHeaders);
+      staleHeaders.set("cache-control", `public, max-age=${Math.max(freshSeconds, staleSeconds)}`);
+      try {
+        await Promise.all([
+          cache.put(freshKey, new Response(body.slice(0), { status: response.status, statusText: response.statusText, headers: freshHeaders })),
+          cache.put(staleKey, new Response(body.slice(0), { status: response.status, statusText: response.statusText, headers: staleHeaders }))
+        ]);
+      } catch (error) {
+        console.warn("LK Newsroom edge cache write skipped:", error instanceof Error ? error.message : String(error));
+      }
+    } else if (stale) {
+      return cachedClientResponse(stale, "stale");
+    }
+    return response;
+  } catch (error) {
+    // D1 Free-plan limits or a temporary query failure should not blank the
+    // newsroom when a recent successful response is available at this edge.
+    if (stale) return cachedClientResponse(stale, "stale");
+    throw error;
+  }
+}
+
 function slugify(value: unknown) {
   return String(value || "").normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 120) || "general";
 }
@@ -229,9 +289,12 @@ async function publicNews(request: Request, env: Env) {
   const sortOrder = view === "trending" || view === "most-read" ? "a.view_count DESC, COALESCE(a.published_at,a.created_at) DESC" : "COALESCE(a.published_at,a.created_at) DESC";
   const rows = await env.DB.prepare("SELECT " + articleSelect + articleJoin + where + " ORDER BY " + sortOrder + " LIMIT ?" + (args.length + 1) + " OFFSET ?" + (args.length + 2))
     .bind(...args, limit, offset).all();
-  const count = await env.DB.prepare("SELECT COUNT(*) AS total FROM articles a LEFT JOIN categories c ON c.id=a.category_id LEFT JOIN news_sources s ON s.id=a.source_id" + where)
-    .bind(...args).first();
-  return json({ data: (rows.results || []).map((r: any) => packArticle(r)), total: Number(count?.total || 0), offset, limit, updatedAt: new Date().toISOString() });
+  const data = (rows.results || []).map((r: any) => packArticle(r));
+  // Avoid a full COUNT(*) scan of ~25k+ articles on every page view. The
+  // existing Load More UI only needs a forward-pagination signal here.
+  const hasMore = data.length >= limit;
+  const paginationTotal = offset + data.length + (hasMore ? 1 : 0);
+  return json({ data, total: paginationTotal, totalExact: false, hasMore, offset, limit, updatedAt: new Date().toISOString() });
 }
 
 async function publicArticle(identifier: string, env: Env) {
@@ -288,6 +351,13 @@ function articleShellPath(url: URL, path: string) {
 }
 async function serveAssets(request: Request, env: Env) {
   const url = new URL(request.url);
+  if (!env.ASSETS || typeof env.ASSETS.fetch !== "function") {
+    console.error("LK Newsroom static asset binding ASSETS is missing; check wrangler.jsonc assets.binding.");
+    return new Response("LK Newsroom static assets are not configured. Redeploy with assets.binding set to ASSETS.", {
+      status: 503,
+      headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }
+    });
+  }
   if (url.pathname === "/news" || url.pathname.startsWith("/news/")) return env.ASSETS.fetch(articleShellPath(url, "/pages/article.html"));
   if (url.pathname.startsWith("/category/")) return env.ASSETS.fetch(articleShellPath(url, "/pages/category.html"));
   return env.ASSETS.fetch(request);
@@ -1628,14 +1698,16 @@ async function route(request: Request, env: Env): Promise<Response> {
   const paymentMatch = path.match(/^\/v1\/monetization\/payments\/([^/]+)$/);
   if (paymentMatch && request.method === "GET") return verifyPayment(decodeURIComponent(paymentMatch[1]), env, origin);
   if (path === "/v1/advertisements" && request.method === "GET") {
-    const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
-    const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR datetime(starts_at)<=datetime('now')) AND (ends_at IS NULL OR datetime(ends_at)>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
-    return json({ data: rows.results || [] }, 200, origin);
+    return withPublicCache(request, 300, 86400, async () => {
+      const limit = Math.min(20, safeLimit(url.searchParams.get("limit")));
+      const rows = await env.DB.prepare("SELECT id,name,image_url,target_url,html_content,placement FROM advertisements WHERE active=1 AND (starts_at IS NULL OR datetime(starts_at)<=datetime('now')) AND (ends_at IS NULL OR datetime(ends_at)>datetime('now')) ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
+      return json({ data: rows.results || [] }, 200, origin);
+    });
   }
-  if (path === "/v1/news" && request.method === "GET") return publicNews(request, env);
-  if (path === "/v1/breaking" && request.method === "GET") return publicBreaking(env);
-  if (path === "/v1/videos" && request.method === "GET") return publicVideos(env, url);
-  if (path.startsWith("/v1/categories/") && request.method === "GET") return publicCategories(path.slice("/v1/categories/".length), env);
+  if (path === "/v1/news" && request.method === "GET") return withPublicCache(request, 90, 86400, () => publicNews(request, env));
+  if (path === "/v1/breaking" && request.method === "GET") return withPublicCache(request, 60, 86400, () => publicBreaking(env));
+  if (path === "/v1/videos" && request.method === "GET") return withPublicCache(request, 300, 86400, () => publicVideos(env, url));
+  if (path.startsWith("/v1/categories/") && request.method === "GET") return withPublicCache(request, 900, 86400, () => publicCategories(path.slice("/v1/categories/".length), env));
   const commentMatch = path.match(/^\/v1\/news\/([^/]+)\/comments$/);
   if (commentMatch && request.method === "POST") {
     try {
@@ -1668,7 +1740,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ ok: changes > 0 }, 202, origin);
   }
   const newsMatch = path.match(/^\/v1\/news\/([^/]+)$/);
-  if (newsMatch && request.method === "GET") return publicArticle(newsMatch[1], env);
+  if (newsMatch && request.method === "GET") return withPublicCache(request, 120, 86400, () => publicArticle(newsMatch[1], env));
   if (path === "/v1/newsletter" && request.method === "POST") {
     try {
       const body = await request.json() as any;
