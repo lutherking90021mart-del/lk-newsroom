@@ -1873,6 +1873,11 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/analytics/advertisements" && request.method === "POST") {
     return json({ ok: false, error: "Advertisement analytics migration is pending." }, 501, origin);
   }
+  // Never send unknown API routes to the static asset router; otherwise a
+  // missing ASSETS binding turns a simple missing endpoint into a Worker 503.
+  if (path.startsWith("/v1/") || path.startsWith("/api/")) {
+    return json({ error: "API endpoint not found.", path }, 404, origin);
+  }
   return serveAssets(request, env);
 }
 
