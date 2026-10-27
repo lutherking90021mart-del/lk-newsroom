@@ -41,10 +41,32 @@ async function cacheBustEntryModules(directory) {
     }
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".html")) continue;
     const html = await readFile(path, "utf8");
-    const updated = html.replace(/((?:\.\.\/)*js\/(?:app|admin|markets|match-centre)\.js)(?:\?[^"'\s>]*)?/g, `$1?v=${assetVersion}`);
+    // Refresh local JS and CSS URLs together so browsers cannot keep the old
+    // plain/un-styled shell after a deployment. External URLs are untouched.
+    const pattern = /((?:\/|(?:\.\.\/)*)(?:js\/(?:app|admin|markets|match-centre)\.js|styles\/[A-Za-z0-9_./-]+\.css))(?:\?[^"'\s>]*)?/g;
+    const updated = html.replace(pattern, `$1?v=${assetVersion}`);
     if (updated !== html) await writeFile(path, updated, "utf8");
   }
 }
 await cacheBustEntryModules(dist);
+
+// CSS @import files must also be cache-busted. Otherwise global.css could load
+// while its component stylesheets are still being served from an old cache.
+async function cacheBustCssImports(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      await cacheBustCssImports(path);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".css")) continue;
+    const css = await readFile(path, "utf8");
+    const pattern = /(url\(\s*["']?)(\.\.\/|\.\/)([^"'()\s]+\.css)(?:\?[^"'()\s]*)?(["']?\s*\))/g;
+    const updated = css.replace(pattern, `$1$2$3?v=${assetVersion}$4`);
+    if (updated !== css) await writeFile(path, updated, "utf8");
+  }
+}
+await cacheBustCssImports(resolve(dist, "styles"));
 
 console.log("Cloudflare public assets built into dist/. Server-only folders and environment files were not copied.");
