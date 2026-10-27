@@ -146,9 +146,9 @@ async function runArticleCacheBackfill(env: Env) {
   // Warm a small batch of existing published articles into R2 on each cron
   // run. D1 is read-only here; public detail requests can then use R2 during
   // a future D1 quota outage.
-  // Stay below the Workers Free 50-subrequest invocation limit: 45 R2 writes +
-  // one D1 query + R2 state read/write. The job advances by ID, so it is resumable.
-  const batchSize = 45;
+  // Stay below the Workers Free CPU/subrequest budgets. This is a resumable
+  // keyset scan; 25 R2 article writes per minute warms the archive in about 17 hours.
+  const batchSize = 25;
   let state: any = { cursor: "", complete: false };
   try {
     const storedState = await env.MEDIA.get(ARTICLE_CACHE_BACKFILL_STATE);
