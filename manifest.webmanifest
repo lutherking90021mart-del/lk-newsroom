@@ -15,9 +15,9 @@
   ],
   "icons": [
     {
-      "src": "/assets/lk-newsroom-app-icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/assets/lk-newsroom-logo.png",
+      "sizes": "474x474",
+      "type": "image/png",
       "purpose": "any"
     }
   ]
