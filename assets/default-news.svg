@@ -1,9 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title description">
-  <title id="title">LK Newsroom default article image</title>
-  <desc id="description">A professional dark blue news graphic with a red breaking-news accent.</desc>
-  <defs><linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#003366"/><stop offset="1" stop-color="#071b2d"/></linearGradient><pattern id="lines" width="36" height="36" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0V36" stroke="#fff" stroke-opacity=".05" stroke-width="2"/></pattern></defs>
-  <rect width="1200" height="720" fill="url(#background)"/><rect width="1200" height="720" fill="url(#lines)"/><rect y="548" width="1200" height="172" fill="#e31e24"/>
-  <rect x="84" y="86" width="88" height="88" rx="4" fill="#e31e24"/><text x="212" y="147" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="68" font-weight="800" letter-spacing="3">LK NEWSROOM</text>
-  <text x="87" y="330" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="104" font-weight="800">VERIFIED NEWS</text><rect x="90" y="380" width="440" height="12" fill="#e31e24"/>
-  <text x="90" y="472" fill="#c9d9e8" font-family="Arial, Helvetica, sans-serif" font-size="38" letter-spacing="2">INFORMING TODAY, INSPIRING TOMORROW</text>
+  <title id="title">News photograph unavailable</title>
+  <desc id="description">A restrained LK Newsroom placeholder used when a publisher has not supplied a usable photograph.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#123957"/><stop offset="1" stop-color="#081725"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#17699a" stop-opacity=".75"/><stop offset="1" stop-color="#17699a" stop-opacity="0"/></radialGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#fff" stroke-opacity=".035"/></pattern>
+  </defs>
+  <rect width="1200" height="720" fill="url(#bg)"/>
+  <rect width="1200" height="720" fill="url(#grid)"/>
+  <circle cx="870" cy="230" r="400" fill="url(#glow)"/>
+  <path d="M0 570C260 500 460 690 730 590S1030 520 1200 600V720H0Z" fill="#06111d" fill-opacity=".58"/>
+  <g transform="translate(510 205)" fill="none" stroke="#dce8f2" stroke-linecap="round" stroke-linejoin="round" stroke-opacity=".72" stroke-width="13">
+    <rect x="0" y="0" width="180" height="222" rx="12"/>
+    <path d="M35 52H145M35 82H145M35 112H94M35 157H145M35 185H116"/>
+  </g>
+  <rect x="72" y="78" width="9" height="72" rx="4" fill="#e31e24"/>
+  <text x="101" y="110" font-family="Arial,Helvetica,sans-serif" font-size="25" font-weight="700" letter-spacing="4" fill="#dce8f2" opacity=".82">LK NEWSROOM</text>
+  <text x="600" y="544" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="24" font-weight="600" letter-spacing="5" fill="#dce8f2" opacity=".7">PHOTO UNAVAILABLE</text>
 </svg>
