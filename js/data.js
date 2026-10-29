@@ -14,7 +14,7 @@ export const articles = [
   {id:12,slug:'athletes-inspire-at-youth-games',title:'Athletes inspire at youth games opening ceremony',excerpt:'A vibrant gathering of talent and teamwork opens the annual competition.',category:'Sports',author:'Esi Kwarteng',date:'July 27, 2026',time:'5 days ago',views:13800,reading:3,image:'https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=1000&q=82'}
 ];
 export const categories = [
-  ['Ghana','fa-flag'],['Politics','fa-landmark'],['Business','fa-chart-line'],['Technology','fa-microchip'],['Entertainment','fa-film'],['Sports','fa-futbol'],['Health','fa-heart-pulse'],['Education','fa-graduation-cap'],['Africa','fa-earth-africa'],['World','fa-globe'],['Opinion','fa-pen-nib']
+  ['Ghana','fa-flag'],['Politics','fa-landmark'],['Business','fa-chart-line'],['Technology','fa-microchip'],['Sports','fa-futbol'],['Health','fa-heart-pulse'],['Education','fa-graduation-cap'],['Africa','fa-earth-africa'],['World','fa-globe'],['Opinion','fa-pen-nib']
 ];
 export const videos = [
   {title:'Inside the innovation hubs changing how Africa builds',image:'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=900&q=82'},
