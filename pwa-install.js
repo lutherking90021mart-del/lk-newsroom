@@ -1,6 +1,6 @@
 let lkInstallPrompt=null;
 document.addEventListener('DOMContentLoaded',()=>{
-  if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js?v=lk-newsroom-mobile-cache-v2',{scope:'/',updateViaCache:'none'}).then(registration=>registration.update()).catch(error=>console.warn('LK Newsroom offline shell unavailable:',error));
+  if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js?v=lk-newsroom-mobile-cache-v3',{scope:'/',updateViaCache:'none'}).then(registration=>registration.update()).catch(error=>console.warn('LK Newsroom offline shell unavailable:',error));
   const installed=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
   if(installed)return;
   const button=document.createElement('button');
