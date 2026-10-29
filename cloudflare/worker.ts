@@ -621,7 +621,7 @@ async function publicNews(request: Request, env: Env) {
 async function publicArticleFromD1(identifier: string, env: Env) {
   const id = decodeURIComponent(identifier);
   if (/^feed-[a-f0-9]{24}$/i.test(id)) return publicEmergencyRssArticle(id);
-  const by = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? "a.id=?1" : "a.slug=?1";
+  const by = /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id) ? "lower(a.id)=lower(?1)" : "lower(a.slug)=lower(?1)";
   const row = await articleQuery(env, " WHERE " + by + " AND a.status='published' AND a.duplicate_of IS NULL").bind(id).first();
   if (!row) return json({ error: "Article not found" }, 404);
   const article = packArticle(row);
@@ -676,8 +676,15 @@ async function publicCategories(slug: string, env: Env) {
 
 async function publicVideos(env: Env, url: URL) {
   const limit = Math.min(48, safeLimit(url.searchParams.get("limit")));
-  const rows = await env.DB.prepare("SELECT v.id,v.title,v.description,v.video_url,v.youtube_url,v.thumbnail_url,v.duration_seconds,v.published_at,v.created_at,s.name AS source_name,s.slug AS source_slug FROM videos v LEFT JOIN articles a ON a.id=v.article_id LEFT JOIN news_sources s ON s.id=a.source_id WHERE v.status='published' ORDER BY COALESCE(v.published_at,v.created_at) DESC LIMIT ?1").bind(limit).all();
-  return json({ data: rows.results || [], updatedAt: new Date().toISOString() });
+  const requestedFreshDays = Number(url.searchParams.get("freshDays") || 14);
+  const freshDays = Number.isFinite(requestedFreshDays) ? Math.min(30, Math.max(1, Math.trunc(requestedFreshDays))) : 14;
+  const rows = await env.DB.prepare(
+    "SELECT v.id,v.title,v.description,v.video_url,v.youtube_url,v.thumbnail_url,v.duration_seconds,v.published_at,v.created_at,s.name AS source_name,s.slug AS source_slug " +
+    "FROM videos v LEFT JOIN articles a ON a.id=v.article_id LEFT JOIN news_sources s ON s.id=a.source_id " +
+    "WHERE v.status='published' AND COALESCE(v.published_at,v.created_at)>=datetime('now',?1) " +
+    "ORDER BY COALESCE(v.published_at,v.created_at) DESC LIMIT ?2"
+  ).bind("-" + freshDays + " days", limit).all();
+  return json({ data: rows.results || [], updatedAt: new Date().toISOString(), freshnessDays: freshDays, source: "publisher-video-feeds" });
 }
 async function publicBreaking(env: Env) {
   const rows = await env.DB.prepare("SELECT b.id,b.headline,b.link_url,b.starts_at,b.pinned,a.id AS article_id,a.original_url FROM breaking_news b LEFT JOIN articles a ON a.id=b.article_id WHERE b.active=1 AND (b.ends_at IS NULL OR b.ends_at>datetime('now')) ORDER BY b.pinned DESC,b.starts_at DESC LIMIT 8").all();
@@ -935,6 +942,59 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
   return { inserted, updated, skipped };
 }
 
+
+function isPublisherVideoSource(source: any): boolean {
+  return /(?:^|-)video$/i.test(String(source?.slug || ""));
+}
+
+function youtubeVideoId(item: any): string {
+  const direct = text(item?.videoId).trim();
+  if (direct) return direct.replace(/^yt:video:/i, "");
+  const candidate = String(text(item?.external) + " " + text(item?.url));
+  const match = candidate.match(/(?:yt:video:|[?&]v=|youtu\.be\/|\/(?:shorts|embed|live)\/)([A-Za-z0-9_-]{6,})/i);
+  return match?.[1] || "";
+}
+
+/** Store current publisher YouTube Atom entries as real video cards. */
+async function upsertFeedVideos(env: Env, source: any, entries: any[]): Promise<number> {
+  const candidates = entries.map((item: any) => {
+    const url = String(item.url || "").trim();
+    if (!/^https?:\/\/(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)\//i.test(url)) return null;
+    const id = youtubeVideoId(item);
+    const image = String(item.image || "").trim() || (id ? "https://i.ytimg.com/vi/" + encodeURIComponent(id) + "/hqdefault.jpg" : null);
+    return { item, url, image, external: String(item.external || url).slice(0, 1000) };
+  }).filter(Boolean) as any[];
+  if (!candidates.length) return 0;
+
+  const externalIds = Array.from(new Set(candidates.map((item: any) => item.external)));
+  const placeholders = externalIds.map((_value, index) => "?" + (index + 2)).join(",");
+  const articleRows = await env.DB.prepare(
+    "SELECT id,external_id FROM articles WHERE source_id=?1 AND external_id IN (" + placeholders + ")"
+  ).bind(source.id, ...externalIds).all();
+  const articleByExternal = new Map<string, string>();
+  for (const row of (articleRows.results || []) as any[]) articleByExternal.set(String(row.external_id), String(row.id));
+
+  const now = new Date().toISOString();
+  const statements: any[] = [];
+  for (const candidate of candidates) {
+    const digest = await sha(candidate.external);
+    const slug = slugify(String(source.slug || "publisher") + "-" + digest.slice(0, 16));
+    const title = cleanHtml(candidate.item.title).slice(0, 800) || "Publisher video";
+    const description = cleanHtml(candidate.item.summary || candidate.item.content).slice(0, 5000) || null;
+    const published = safeDate(candidate.item.published);
+    statements.push(env.DB.prepare(
+      "INSERT INTO videos (id,title,slug,description,video_url,youtube_url,thumbnail_url,duration_seconds,article_id,status,published_at,created_at,updated_at) " +
+      "VALUES (?1,?2,?3,?4,?5,?5,?6,NULL,?7,'published',?8,?9,?9) " +
+      "ON CONFLICT(slug) DO UPDATE SET title=excluded.title,description=excluded.description,video_url=excluded.video_url,youtube_url=excluded.youtube_url,thumbnail_url=COALESCE(excluded.thumbnail_url,videos.thumbnail_url),article_id=COALESCE(excluded.article_id,videos.article_id),status='published',published_at=excluded.published_at,updated_at=excluded.updated_at"
+    ).bind(
+      crypto.randomUUID(), title, slug, description, candidate.url,
+      candidate.image, articleByExternal.get(candidate.external) || null, published, now
+    ));
+  }
+  if (statements.length) await env.DB.batch(statements);
+  return candidates.length;
+}
+
 async function runFeedSync(env: Env, requestedSourceSlug?: string) {
   const started = new Date().toISOString();
   const lockName = "news-ingestion";
@@ -966,13 +1026,14 @@ async function runFeedSync(env: Env, requestedSourceSlug?: string) {
         fetched += entries.length;
         const category = await resolveCategory(env, String(source.default_category || "World"), categoryCache);
         const counts = await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
+        const videosSaved = isPublisherVideoSource(source) ? await upsertFeedVideos(env, source, entries) : 0;
         added += counts.inserted;
         updated += counts.updated;
         skipped += counts.skipped;
         const ended = new Date().toISOString();
         await env.DB.batch([
           env.DB.prepare("UPDATE news_sources SET last_synced_at=?1,last_status='success',last_error=NULL,consecutive_failures=0,updated_at=?1 WHERE id=?2").bind(ended, source.id),
-          env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'info','sync_completed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ fetched: entries.length, inserted: counts.inserted, updated: counts.updated, skipped: counts.skipped }), Date.now() - began, ended)
+          env.DB.prepare("INSERT INTO feed_logs(id,source_id,level,event,details,duration_ms,created_at) VALUES (?1,?2,'info','sync_completed',?3,?4,?5)").bind(crypto.randomUUID(), source.id, JSON.stringify({ fetched: entries.length, inserted: counts.inserted, updated: counts.updated, skipped: counts.skipped, videosSaved }), Date.now() - began, ended)
         ]);
       } catch (error) {
         errors++;
@@ -2105,13 +2166,13 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/v1/news/live" && request.method === "GET") return withPublicCache(request, 45, 600, () => publicEmergencyRssNews(request, "live-rss"));
   if (path === "/v1/news" && request.method === "GET") return withPublicCache(request, 90, 86400, () => publicNews(request, env));
   if (path === "/v1/breaking" && request.method === "GET") return withPublicCache(request, 60, 86400, () => publicBreaking(env));
-  if (path === "/v1/videos" && request.method === "GET") return withPublicCache(request, 300, 86400, () => publicVideos(env, url));
+  if (path === "/v1/videos" && request.method === "GET") return withPublicCache(request, 60, 900, () => publicVideos(env, url));
   if (path.startsWith("/v1/categories/") && request.method === "GET") return withPublicCache(request, 900, 86400, () => publicCategories(path.slice("/v1/categories/".length), env));
   const commentMatch = path.match(/^\/v1\/news\/([^/]+)\/comments$/);
   if (commentMatch && request.method === "POST") {
     try {
       const articleId = decodeURIComponent(commentMatch[1]);
-      const article = await env.DB.prepare("SELECT id FROM articles WHERE (id=?1 OR slug=?1) AND status='published' AND duplicate_of IS NULL LIMIT 1").bind(articleId).first();
+      const article = await env.DB.prepare("SELECT id FROM articles WHERE (lower(id)=lower(?1) OR lower(slug)=lower(?1)) AND status='published' AND duplicate_of IS NULL LIMIT 1").bind(articleId).first();
       if (!article) return json({ error: "Article not found" }, 404, origin);
       const body = await request.json() as any;
       const name = String(body.displayName || "").trim().slice(0, 80);
