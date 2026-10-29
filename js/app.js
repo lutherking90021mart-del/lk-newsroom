@@ -159,7 +159,7 @@ async function hydrateNews(){
 const toUiVideo=row=>({id:row.id,title:decodeArticleEntities(row.title),description:decodeArticleEntities(row.description||''),image:row.thumbnail_url||fallbackImage(),url:row.youtube_url||row.video_url||'',source:decodeArticleEntities(row.source_name||row.articles?.news_sources?.name||'LK Newsroom'),publishedAt:row.published_at||row.created_at});
 async function hydrateVideos(){
   try{
-    const endpoint=aggregatorApi()+'/v1/videos?limit=24&freshDays=14&refresh='+Date.now();
+    const endpoint=aggregatorApi()+'/v1/videos?limit=24&freshDays=14';
     const response=await fetch(endpoint,{cache:'no-store',headers:{accept:'application/json'}});
     if(!response.ok)throw new Error('Video API returned HTTP '+response.status);
     const payload=await response.json();
