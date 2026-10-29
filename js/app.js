@@ -42,11 +42,29 @@ const categoryDetails={
 function selectedCategory(){const route=location.pathname.match(/^\/category\/([^/]+)\/?$/);const requested=route?decodeURIComponent(route[1]):query.get('category')||document.body.dataset.category||'Latest';return categories.find(([name])=>categorySlug(name)===categorySlug(requested))?.[0]||'Latest';}
 const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Published just now';if(minutes<60)return 'Published '+minutes+' minute'+(minutes===1?'':'s')+' ago';const hours=Math.floor(minutes/60);if(hours<24)return 'Published '+hours+' hour'+(hours===1?'':'s')+' ago';const days=Math.floor(hours/24);return days===1?'Published yesterday':'Published '+days+' days ago';}
 const uiDate=date=>new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date));
+const decodeArticleEntities=value=>{const field=document.createElement('textarea');field.innerHTML=String(value??'');return field.value;};
+const normalizeArticleText=value=>decodeArticleEntities(value).replace(/<[^>]*>/g,' ').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[’‘]/g,"'").replace(/\s+/g,' ').trim().toLocaleLowerCase();
+const articleBodyWithoutRepeatedExcerpt=(body,excerpt)=>{
+  const source=decodeArticleEntities(body).replace(/\r/g,'').trim();
+  if(!source)return '';
+  const excerptText=decodeArticleEntities(excerpt||'').replace(/\r/g,'').trim();
+  const excerptKey=normalizeArticleText(excerptText);
+  if(!excerptKey)return source;
+  const blocks=source.split(/\n\s*\n/).map(part=>part.trim()).filter(Boolean);
+  if(blocks.length&&normalizeArticleText(blocks[0])===excerptKey)blocks.shift();
+  if(!blocks.length)return '';
+  const first=blocks[0].trim();
+  if(excerptText&&first.length>excerptText.length&&normalizeArticleText(first.slice(0,excerptText.length))===excerptKey){
+    const remainder=first.slice(excerptText.length).replace(/^[\s:—–.,;!?-]+/,'').trim();
+    if(remainder)blocks[0]=remainder;else blocks.shift();
+  }
+  return blocks.join('\n\n');
+};
 const toUiArticle=row=>({
-  id:row.id,slug:row.slug||row.id,title:row.title,excerpt:row.excerpt||row.ai_summary||'',
-  content:row.content_markdown||row.content||row.ai_summary||row.excerpt||'',category:row.categories?.name||'News',
-  categorySlug:row.categories?.slug||'',author:row.authors?.name||row.news_sources?.name||'LK Newsroom',
-  source:row.news_sources?.name||'LK Newsroom',sourceSlug:row.news_sources?.slug||'',country:row.country||'International',
+  id:row.id,slug:row.slug||row.id,title:decodeArticleEntities(row.title),excerpt:decodeArticleEntities(row.excerpt||row.ai_summary||''),
+  content:decodeArticleEntities(row.content_markdown||row.content||row.ai_summary||row.excerpt||''),category:decodeArticleEntities(row.categories?.name||'News'),
+  categorySlug:row.categories?.slug||'',author:decodeArticleEntities(row.authors?.name||row.news_sources?.name||'LK Newsroom'),
+  source:decodeArticleEntities(row.news_sources?.name||'LK Newsroom'),sourceSlug:row.news_sources?.slug||'',country:decodeArticleEntities(row.country||'International'),
   date:uiDate(row.published_at||row.created_at),publishedAt:row.published_at||row.created_at,time:relativeTime(row.published_at||row.created_at),
   views:Number(row.view_count||0),reading:Math.max(1,Math.ceil(String(row.content_markdown||row.content||row.ai_summary||row.excerpt||'').split(/\s+/).filter(Boolean).length/220)),
   image:row.featured_image_url||fallbackImage(),originalUrl:row.original_url||'',tags:row.auto_tags||[],sponsor:row.sponsored_article_details||null,raw:row
@@ -131,8 +149,25 @@ async function hydrateNews(){
     return feed.length>0;
   }finally{newsLoading=false;}
 }
-const toUiVideo=row=>({id:row.id,title:row.title,description:row.description||'',image:row.thumbnail_url||fallbackImage(),url:row.youtube_url||row.video_url||'',source:row.articles?.news_sources?.name||'LK Newsroom',publishedAt:row.published_at||row.created_at});
-async function hydrateVideos(){try{const response=await fetch(`${aggregatorApi()}/v1/videos?limit=24`);if(!response.ok)return;const payload=await response.json();videoFeedLoaded=true;if(Array.isArray(payload.data))liveVideos=payload.data.map(toUiVideo);}catch{}}
+const toUiVideo=row=>({id:row.id,title:decodeArticleEntities(row.title),description:decodeArticleEntities(row.description||''),image:row.thumbnail_url||fallbackImage(),url:row.youtube_url||row.video_url||'',source:decodeArticleEntities(row.source_name||row.articles?.news_sources?.name||'LK Newsroom'),publishedAt:row.published_at||row.created_at});
+async function hydrateVideos(){
+  try{
+    const endpoint=aggregatorApi()+'/v1/videos?limit=24&freshDays=14&refresh='+Date.now();
+    const response=await fetch(endpoint,{cache:'no-store',headers:{accept:'application/json'}});
+    if(!response.ok)throw new Error('Video API returned HTTP '+response.status);
+    const payload=await response.json();
+    const cutoff=Date.now()-14*24*60*60*1000;
+    videoFeedLoaded=true;
+    liveVideos=Array.isArray(payload.data)?payload.data.filter(row=>{
+      const published=Date.parse(row.published_at||row.created_at||'');
+      return Number.isFinite(published)&&published>=cutoff;
+    }).map(toUiVideo):[];
+  }catch(error){
+    videoFeedLoaded=false;
+    liveVideos=[];
+    console.warn('Latest publisher video feed is temporarily unavailable.',error);
+  }
+}
 function youtubeEmbedUrl(value){try{const url=new URL(value);const host=url.hostname.replace(/^www\./,'').toLowerCase();let id='';if(host==='youtu.be')id=url.pathname.split('/').filter(Boolean)[0]||'';if(host==='youtube.com'||host==='m.youtube.com'){if(url.pathname==='/watch')id=url.searchParams.get('v')||'';else if(/^\/(embed|live|shorts)\//.test(url.pathname))id=url.pathname.split('/')[2]||'';if(url.pathname==='/live_stream')return `https://www.youtube-nocookie.com/embed/live_stream?${url.searchParams.toString()}&autoplay=1&rel=0`;}return id?`https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0`:'';}catch{return '';}}
 function playerMarkup(url,title){const youtube=youtubeEmbedUrl(url);if(youtube)return `<iframe src="${esc(youtube)}" title="${esc(title)}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>`;if(/\.(mp4|webm|ogg)(?:[?#].*)?$/i.test(url))return `<video controls autoplay playsinline><source src="${esc(url)}"></video>`;return `<iframe src="${esc(url)}" title="${esc(title)}" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe>`;}
 function closeVideoPlayer(){document.querySelector('.video-player-modal')?.remove();document.documentElement.classList.remove('video-player-open');}
@@ -197,11 +232,11 @@ function home(){
   const used=new Set();
   const imageFirstFeed=feed.filter(article=>!isFallbackImage(article.image)).concat(feed.filter(article=>isFallbackImage(article.image)));
   const heroStories=takeUnused(imageFirstFeed,3,used);renderHero(heroStories);
-  const featuredStories=takeUnused(feed,3,used);
+  const featuredStories=takeUnused(feed,6,used);
   const editorStories=takeUnused([...feed].filter(article=>article.category==='Opinion'||article.category==='Politics'||article.category==='Business').concat(feed),4,used);
-  const latestStories=takeUnused(feed,6,used);
-  const trendingStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),3,used);
-  const mostReadStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),4,used);
+  const latestStories=takeUnused(feed,12,used);
+  const trendingStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),6,used);
+  const mostReadStories=takeUnused([...feed].sort((a,b)=>b.views-a.views),8,used);
   const remainingStories=feed.filter(article=>!used.has(String(article.id||article.slug||article.title)));
   const feedNotice=`<div class="empty-state newsroom-feed-state"><i class="fa-solid fa-newspaper fa-2x"></i><p>${newsLoading?'Loading the latest stories…':'The live news feed is temporarily unavailable. Please try again shortly.'}</p></div>`;
   const cards=(stories,compact=false)=>stories.length?stories.map((article,index)=>articleCard(article,compact&&index>0)).join(''):feedNotice;
@@ -329,11 +364,21 @@ async function articlePage(){
   target.innerHTML='<div class="container section"><div class="spinner"></div></div>';
   try{
     const payload=await getArticle(identifier);const article=toUiArticle(payload.data);document.title=`${article.title} | LK Newsroom`;
-    const original=article.originalUrl?`<div class="article-source-wrap"><a class="btn btn-outline article-source-cta" href="${esc(article.originalUrl)}" target="_blank" rel="noopener noreferrer"><span>Read the full story at</span> <strong>${esc(article.source)}</strong> <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i></a></div>`:'';
+    const original=article.source?`<p class="article-source-reference"><strong>Source:</strong> ${esc(decodeArticleEntities(article.source))}</p>`:'';
     const sponsor=article.sponsor?`<aside class="sponsored-disclosure"><span>Sponsored</span><strong>Paid partnership with ${article.sponsor.sponsor_url?`<a href="${esc(article.sponsor.sponsor_url)}" target="_blank" rel="sponsored noopener">${esc(article.sponsor.sponsor_name)}</a>`:esc(article.sponsor.sponsor_name)}</strong>${article.sponsor.campaign_details?`<p>${esc(article.sponsor.campaign_details)}</p>`:''}</aside>`:'';
     const tags=(article.tags||[]).map(tag=>`<span class="tag">${esc(tag)}</span>`).join('')||`<span class="tag">${esc(article.category)}</span>`;
+    const excerptText=decodeArticleEntities(article.excerpt||'').trim();
+    const storedBody=decodeArticleEntities(article.raw?.content_markdown||article.raw?.content||'').trim();
+    const candidateBody=storedBody||decodeArticleEntities(article.content||'').trim();
+    const articleText=articleBodyWithoutRepeatedExcerpt(candidateBody,excerptText);
+    const articleTextKey=normalizeArticleText(articleText);
+    const excerptKey=normalizeArticleText(excerptText);
+    const aiSummary=decodeArticleEntities(article.raw?.ai_summary||'').trim();
+    const summaryKey=normalizeArticleText(aiSummary);
+    const additionalContext=aiSummary&&summaryKey!==articleTextKey&&summaryKey!==excerptKey ? '<section class="article-ai-summary"><h2>Additional context</h2>'+paragraphs(aiSummary)+'</section>' : '';
+    const storyBodyHtml=paragraphs(articleText)||(!additionalContext?paragraphs(excerptText):'');
     const comments=payload.comments||[];
-    target.innerHTML=`<div class="container"><header class="article-header"><span class="eyebrow">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p class="text-muted">${esc(article.excerpt)}</p><div class="article-byline"><div class="author">${sourceMark(article.source)}<div><strong>${esc(article.author)}</strong><div class="meta">${esc(article.source)}</div></div></div><div class="meta"><i class="fa-regular fa-calendar"></i> ${esc(article.date)} &nbsp; <i class="fa-regular fa-clock"></i> ${article.reading} min read &nbsp; <i class="fa-regular fa-eye"></i> ${article.views.toLocaleString()} views</div></div></header><img class="article-featured" src="${esc(article.image)}" alt="" fetchpriority="high" onerror="this.src='${fallbackImage()}'"><div class="article-body"><div class="share-row"><strong>Share</strong><button class="icon-button" data-share aria-label="Share article"><i class="fa-solid fa-share-nodes"></i></button><button class="icon-button" data-copy-link aria-label="Copy article link"><i class="fa-solid fa-link"></i></button></div>${paragraphs(article.content)||`<p>${esc(article.excerpt)}</p>`}${original}${mediaSection(payload.gallery,'gallery')}${mediaSection(payload.videos,'video')}<div class="tags">${tags}</div><nav class="article-nav">${payload.previous?`<a href="/news/${encodeURIComponent(payload.previous.id)}"><span class="eyebrow">Previous</span><br>${esc(payload.previous.title)}</a>`:'<span></span>'}${payload.next?`<a href="/news/${encodeURIComponent(payload.next.id)}"><span class="eyebrow">Next</span><br>${esc(payload.next.title)}</a>`:'<span></span>'}</nav></div><section class="comments"><h2>Comments <small class="text-muted">(${comments.length})</small></h2><div id="approved-comments">${comments.length?comments.map(comment=>`<article class="comment"><strong>${esc(comment.display_name||'LK Reader')}</strong><span class="meta">${esc(relativeTime(comment.created_at))}</span><p>${esc(comment.body)}</p></article>`).join(''):'<p class="text-muted">No approved comments yet. Be the first to join the conversation.</p>'}</div><form class="form-card" data-comment-form><div class="form-group"><label for="comment-name">Name</label><input id="comment-name" class="form-control" required maxlength="80" placeholder="Your name"></div><div class="form-group"><label for="comment">Join the conversation</label><textarea id="comment" class="form-control" rows="3" required maxlength="5000" placeholder="Write a respectful comment"></textarea></div><button class="btn btn-primary">Post comment</button></form></section></div>`;
+    target.innerHTML=`<div class="container"><header class="article-header"><span class="eyebrow">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p class="text-muted">${esc(article.excerpt)}</p><div class="article-byline"><div class="author">${sourceMark(article.source)}<div><strong>${esc(article.author)}</strong><div class="meta">${esc(article.source)}</div></div></div><div class="meta"><i class="fa-regular fa-calendar"></i> ${esc(article.date)} &nbsp; <i class="fa-regular fa-clock"></i> ${article.reading} min read &nbsp; <i class="fa-regular fa-eye"></i> ${article.views.toLocaleString()} views</div></div></header><img class="article-featured" src="${esc(article.image)}" alt="" fetchpriority="high" onerror="this.src='${fallbackImage()}'"><div class="article-body"><div class="share-row"><strong>Share</strong><button class="icon-button" data-share aria-label="Share article"><i class="fa-solid fa-share-nodes"></i></button><button class="icon-button" data-copy-link aria-label="Copy article link"><i class="fa-solid fa-link"></i></button></div>${storyBodyHtml}${additionalContext}${original}${mediaSection(payload.gallery,'gallery')}${mediaSection(payload.videos,'video')}<div class="tags">${tags}</div><nav class="article-nav">${payload.previous?`<a href="/news/${encodeURIComponent(payload.previous.id)}"><span class="eyebrow">Previous</span><br>${esc(payload.previous.title)}</a>`:'<span></span>'}${payload.next?`<a href="/news/${encodeURIComponent(payload.next.id)}"><span class="eyebrow">Next</span><br>${esc(payload.next.title)}</a>`:'<span></span>'}</nav></div><section class="comments"><h2>Comments <small class="text-muted">(${comments.length})</small></h2><div id="approved-comments">${comments.length?comments.map(comment=>`<article class="comment"><strong>${esc(comment.display_name||'LK Reader')}</strong><span class="meta">${esc(relativeTime(comment.created_at))}</span><p>${esc(comment.body)}</p></article>`).join(''):'<p class="text-muted">No approved comments yet. Be the first to join the conversation.</p>'}</div><form class="form-card" data-comment-form><div class="form-group"><label for="comment-name">Name</label><input id="comment-name" class="form-control" required maxlength="80" placeholder="Your name"></div><div class="form-group"><label for="comment">Join the conversation</label><textarea id="comment" class="form-control" rows="3" required maxlength="5000" placeholder="Write a respectful comment"></textarea></div><button class="btn btn-primary">Post comment</button></form></section></div>`;
     if(article.sponsor)$('.article-body',target)?.insertAdjacentHTML('afterbegin',sponsor);
     // Article body arrives after the initial page shell; mount inline campaigns now so
     // a booked between-paragraph placement has a real article paragraph to attach to.
@@ -344,7 +389,7 @@ async function articlePage(){
     const sourceMore=$('#more-from-source');if(sourceMore)sourceMore.innerHTML=(payload.moreFromSource||[]).map(row=>articleCard(toUiArticle(row),true)).join('')||'<p class="text-muted">No additional stories from this source yet.</p>';
     $('[data-share]')?.addEventListener('click',()=>{trackSocialShare(article.id,navigator.share?'native':'x');if(navigator.share)navigator.share({title:article.title,url:location.href});else window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(article.title)}&url=${encodeURIComponent(location.href)}`,'_blank','noopener');});
     $('[data-copy-link]')?.addEventListener('click',async()=>{trackSocialShare(article.id,'copy_link');await navigator.clipboard?.writeText(location.href);toast('Link copied to clipboard.');});
-    $('[data-comment-form]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;const displayName=$('#comment-name',form).value;const body=$('#comment',form).value;try{const response=await fetch(`${aggregatorApi()}/v1/news/${encodeURIComponent(identifier)}/comments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({displayName,body})});if(!response.ok)throw new Error((await response.json().catch(()=>({}))).error||'Unable to submit comment.');}catch(error){if(!configured){toast(error.message);return;}try{await newsApi.comment(article.id,displayName,body);}catch(fallbackError){toast(fallbackError.message);return;}}form.reset();toast('Thanks — your comment is awaiting moderation.');});
+    $('[data-comment-form]')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;const displayName=$('#comment-name',form).value;const body=$('#comment',form).value;try{const response=await fetch(`${aggregatorApi()}/v1/news/${encodeURIComponent(article.id)}/comments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({displayName,body})});if(!response.ok)throw new Error((await response.json().catch(()=>({}))).error||'Unable to submit comment.');}catch(error){if(!configured){toast(error.message);return;}try{await newsApi.comment(article.id,displayName,body);}catch(fallbackError){toast(fallbackError.message);return;}}form.reset();toast('Thanks — your comment is awaiting moderation.');});
     if(configured)subscribeRealtime('comments',()=>toast('New comment activity detected.'));
   }catch(error){target.innerHTML=`<div class="container section"><div class="empty-state"><i class="fa-solid fa-triangle-exclamation fa-2x"></i><p>${esc(error.message)}</p><a class="btn btn-primary" href="/index.html">Back to the newsroom</a></div></div>`;}
 }
