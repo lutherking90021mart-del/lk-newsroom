@@ -244,7 +244,7 @@ function home(){
   if(window.gsap)gsap.from('.featured-strip article',{y:26,opacity:0,stagger:.12,duration:.55,delay:.25});
 }
 async function categoryPage(){
-  const requestedRoute=location.pathname.match(/^\\/category\\/([^/]+)\\/?$/);
+  const requestedRoute=location.pathname.match(/^\/category\/([^/]+)\/?$/);
   const requestedCategory=requestedRoute?decodeURIComponent(requestedRoute[1]):(query.get('category')||document.body.dataset.category||'Latest');
   if(categorySlug(requestedCategory)==='entertainment'){
     document.title='Entertainment News Temporarily Unavailable | LK Newsroom';
