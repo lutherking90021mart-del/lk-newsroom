@@ -275,4 +275,7 @@ VALUES
 ('bbc-sport','bbc-sport','BBC Sport Football','rss','https://feeds.bbci.co.uk/sport/football/rss.xml','United Kingdom','Sports',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
 ('al-jazeera','al-jazeera','Al Jazeera','rss','https://www.aljazeera.com/xml/rss/all.xml','Qatar','World',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
 ('africanews','africanews','Africanews','rss','https://www.africanews.com/feed/rss','Africa','Africa',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
-('news24','news24','News24','rss','https://feeds.24.com/articles/news24/topstories/rss','South Africa','Africa',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+('news24','news24','News24','rss','https://feeds.24.com/articles/news24/topstories/rss','South Africa','Africa',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
+('bbc-news-video','bbc-news-video','BBC News Videos','rss','https://www.youtube.com/feeds/videos.xml?channel_id=UC16niRr50-MSBwiO3YDb3RA','United Kingdom','World',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
+('al-jazeera-video','al-jazeera-video','Al Jazeera English Videos','rss','https://www.youtube.com/feeds/videos.xml?channel_id=UCNye-wNBqNL5ZzHSJj3l8Bg','Qatar','World',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
+('dw-news-video','dw-news-video','DW News Videos','rss','https://www.youtube.com/feeds/videos.xml?channel_id=UCknLrEdhRCp1aegoMqRaCZg','Germany','World',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);

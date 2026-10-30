@@ -2,3 +2,92 @@
 @import url('./video-player.css');
 @import url('./variables.css'); @import url('./typography.css'); @import url('./animations.css'); @import url('./navbar.css'); @import url('./hero.css'); @import url('./breaking-news.css'); @import url('./cards.css'); @import url('./articles.css'); @import url('./sidebar.css'); @import url('./weather.css'); @import url('./search.css'); @import url('./footer.css'); @import url('./forms.css'); @import url('./admin.css'); @import url('./image-finder.css'); @import url('./category-detail.css'); @import url('./dashboard.css'); @import url('./analytics-dashboard.css'); @import url('./monetization-suite.css'); @import url('./tables.css'); @import url('./darkmode.css'); @import url('./responsive.css'); @import url('./mobile.css');
 *{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--surface);color:var(--ink);font-family:var(--font-sans);font-size:15px;line-height:1.65;transition:background .25s,color .25s} img{max-width:100%;display:block} a{color:inherit;text-decoration:none} button,input,select,textarea{font:inherit} button{cursor:pointer}.container{width:min(100% - 32px,var(--container));margin-inline:auto}.section{padding:64px 0}.section--alt{background:var(--surface-alt)}.section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:26px}.section-heading h2{margin:0}.section-heading h2::before{content:"";display:inline-block;width:5px;height:28px;margin:0 10px -4px 0;background:var(--red);border-radius:5px}.eyebrow{font-weight:800;font-size:.73rem;letter-spacing:.12em;text-transform:uppercase;color:var(--red)}.btn{display:inline-flex;align-items:center;gap:9px;border:0;border-radius:7px;padding:12px 18px;font-weight:800;transition:.25s var(--ease)}.btn-primary{color:#fff;background:var(--blue)}.btn-primary:hover{background:var(--navy);transform:translateY(-2px)}.btn-outline{color:var(--blue);background:transparent;border:1px solid currentColor}.btn-outline:hover{background:var(--blue);color:#fff}.badge{display:inline-flex;padding:3px 8px;border-radius:3px;background:var(--red);color:#fff;font-size:.68rem;letter-spacing:.08em;font-weight:800;text-transform:uppercase}.hide{display:none!important}.skip-link{position:absolute;left:-999px}.skip-link:focus{left:1rem;top:1rem;z-index:1000;background:#fff;padding:10px;color:var(--navy)}.page-hero{padding:72px 0 52px;background:linear-gradient(120deg,var(--navy),#0753a2);color:#fff}.page-hero p{max-width:620px;color:#d6e4f2}.empty-state{text-align:center;padding:64px 20px;color:var(--muted)}
+
+
+
+/* LK Newsroom cross-browser layout guard — loaded after every design layer. */
+:root{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+html{width:100%;max-width:100%;overflow-x:clip;scroll-behavior:smooth}
+body{width:100%;min-width:0;max-width:100%;overflow-x:clip;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+*,*::before,*::after{box-sizing:border-box}
+img,video,iframe,embed,object,svg{max-width:100%}
+button,input,select,textarea{max-width:100%;min-width:0}
+.container{width:calc(100% - 48px);max-width:var(--container,1220px);margin-left:auto;margin-right:auto}
+main,section,header,footer,aside,nav,article{min-width:0}
+.section,.page-hero,.sports-score-section{max-width:100%;min-width:0}
+.section>.container,.page-hero>.container{min-width:0}
+.section-heading{min-width:0;gap:18px}
+.section-heading h2{min-width:0;overflow-wrap:anywhere}
+.news-grid,.story-grid,.featured-strip,.category-tiles,.gallery-grid,.score-strip,.scores-grid,.content-with-sidebar,.footer-main{min-width:0}
+.news-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.story-grid{grid-template-columns:minmax(0,1.45fr) repeat(2,minmax(0,1fr))}
+.featured-strip{grid-template-columns:repeat(3,minmax(0,1fr))}
+.category-tiles{grid-template-columns:repeat(6,minmax(0,1fr))}
+.score-strip{grid-template-columns:repeat(4,minmax(0,1fr))}
+.content-with-sidebar{grid-template-columns:minmax(0,1fr) minmax(250px,335px)}
+.news-card,.publisher-video,.featured-strip article,.sidebar,.sidebar-widget,.score-card,.gallery-item,.footer-section{min-width:0;max-width:100%}
+.news-card h3,.publisher-video h3,.ranked-list a,.meta,.section-heading a,.score-team__identity>span:last-child{overflow-wrap:anywhere}
+.story-grid .news-card:not(:first-child) .news-card__body{min-width:0;flex:1 1 0}
+.story-grid .news-card:not(:first-child) .news-card__image{width:min(42%,220px);min-width:120px;flex:0 1 42%}
+.news-card__image img,.gallery-item img,.video-card img{display:block;width:100%;max-width:100%}
+.publisher-video{overflow:hidden;padding-bottom:14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.publisher-video .video-card{width:100%;aspect-ratio:16/9;border-radius:0}
+.publisher-video>.eyebrow,.publisher-video>h3,.publisher-video>.video-description,.publisher-video>.meta{display:block;margin-left:16px;margin-right:16px}
+.publisher-video>h3{margin-top:10px;margin-bottom:8px}
+.publisher-video .video-description{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.video-player-modal{max-width:100vw;max-height:100dvh;overflow:auto}
+.video-player-modal__dialog{min-width:0;max-width:100%}
+.hero,.hero-slider,.breaking-news,.sports-masthead{max-width:100%;min-width:0}
+.hero-slider{width:100%;max-width:var(--container,1220px);margin-inline:auto}
+.featured-strip{width:100%}
+.ticker-window,.ticker-track,.breaking-inner{min-width:0;max-width:100%}
+.news-card__body,.article-body,.article-header,.comments{min-width:0}
+.ranked-list{min-width:0}
+.ranked-list li{min-width:0}
+.ranked-list li a{min-width:0;overflow-wrap:anywhere}
+.footer-main{grid-template-columns:minmax(0,1.45fr) repeat(4,minmax(0,1fr))}
+@media(max-width:1200px){
+  .container{width:calc(100% - 40px)}
+  .news-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .category-tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .score-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .content-with-sidebar{grid-template-columns:minmax(0,1fr) 290px}
+  .footer-main{grid-template-columns:1.3fr repeat(3,minmax(0,1fr))}
+  .footer-brand{grid-column:span 4}
+}
+@media(max-width:900px){
+  .content-with-sidebar{grid-template-columns:minmax(0,1fr)}
+  .sidebar{width:100%;max-width:100%;border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:24px}
+  .news-grid,.story-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .story-grid .news-card:first-child{grid-column:1/-1;grid-row:auto}
+  .story-grid .news-card:not(:first-child) .news-card__link{display:flex}
+  .story-grid .news-card:not(:first-child) .news-card__image{width:38%;min-width:110px}
+  .featured-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .footer-main{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .footer-brand{grid-column:1/-1}
+}
+@media(max-width:767px){
+  .container{width:calc(100% - 28px)}
+  .section-heading{align-items:flex-start;flex-wrap:wrap}
+  .section-heading .btn{flex:0 0 auto}
+  .news-grid,.story-grid,.featured-strip,.content-with-sidebar{grid-template-columns:minmax(0,1fr)}
+  .story-grid .news-card:first-child{grid-column:auto;grid-row:auto}
+  .story-grid .news-card:not(:first-child) .news-card__link{display:block}
+  .story-grid .news-card:not(:first-child) .news-card__image{width:100%;min-width:0}
+  .category-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .gallery-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .score-strip,.scores-grid{grid-template-columns:minmax(0,1fr)}
+  .footer-main{grid-template-columns:minmax(0,1fr)}
+  .footer-brand{grid-column:auto}
+  .article-body,.article-header,.comments{width:100%;max-width:100%}
+}
+@media(max-width:420px){
+  .container{width:calc(100% - 24px)}
+  .section-heading{gap:10px}
+  .section-heading .btn{padding:9px 11px;font-size:.82rem}
+  .category-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+

@@ -680,7 +680,7 @@ async function publicVideos(env: Env, url: URL) {
   const freshDays = Number.isFinite(requestedFreshDays) ? Math.min(30, Math.max(1, Math.trunc(requestedFreshDays))) : 14;
   const rows = await env.DB.prepare(
     "SELECT v.id,v.title,v.description,v.video_url,v.youtube_url,v.thumbnail_url,v.duration_seconds,v.published_at,v.created_at,s.name AS source_name,s.slug AS source_slug " +
-    "FROM videos v LEFT JOIN articles a ON a.id=v.article_id LEFT JOIN news_sources s ON s.id=a.source_id " +
+    "FROM videos v LEFT JOIN news_sources s ON s.slug LIKE '%-video' AND v.slug LIKE s.slug || '-%' " +
     "WHERE v.status='published' AND COALESCE(v.published_at,v.created_at)>=datetime('now',?1) " +
     "ORDER BY COALESCE(v.published_at,v.created_at) DESC LIMIT ?2"
   ).bind("-" + freshDays + " days", limit).all();
@@ -956,6 +956,56 @@ function youtubeVideoId(item: any): string {
 }
 
 /** Store current publisher YouTube Atom entries as real video cards. */
+const PUBLISHER_VIDEO_SOURCES = [
+  {
+    id: "bbc-news-video",
+    slug: "bbc-news-video",
+    name: "BBC News Videos",
+    feed_url: "https://www.youtube.com/feeds/videos.xml?channel_id=UC16niRr50-MSBwiO3YDb3RA",
+    country: "United Kingdom",
+    default_category: "World"
+  },
+  {
+    id: "al-jazeera-video",
+    slug: "al-jazeera-video",
+    name: "Al Jazeera English Videos",
+    feed_url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCNye-wNBqNL5ZzHSJj3l8Bg",
+    country: "Qatar",
+    default_category: "World"
+  },
+  {
+    id: "dw-news-video",
+    slug: "dw-news-video",
+    name: "DW News Videos",
+    feed_url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCknLrEdhRCp1aegoMqRaCZg",
+    country: "Germany",
+    default_category: "World"
+  }
+];
+
+async function ensurePublisherVideoSources(env: Env): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.batch(PUBLISHER_VIDEO_SOURCES.map(source =>
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO news_sources(id,slug,name,source_type,feed_url,country,default_category,enabled,created_at,updated_at) " +
+      "VALUES (?1,?2,?3,'rss',?4,?5,?6,1,?7,?7)"
+    ).bind(source.id, source.slug, source.name, source.feed_url, source.country, source.default_category, now)
+  ));
+}
+
+function isPublisherVideoSource(source: any): boolean {
+  return /(?:^|-)video$/i.test(String(source?.slug || ""));
+}
+
+function youtubeVideoId(item: any): string {
+  const direct = text(item?.videoId).trim();
+  if (direct) return direct.replace(/^yt:video:/i, "");
+  const candidate = String(text(item?.external) + " " + text(item?.url));
+  const match = candidate.match(/(?:yt:video:|[?&]v=|youtu\.be\/|\/(?:shorts|embed|live)\/)([A-Za-z0-9_-]{6,})/i);
+  return match?.[1] || "";
+}
+
+/** Store recent YouTube Atom entries as video cards, without polluting the article feed. */
 async function upsertFeedVideos(env: Env, source: any, entries: any[]): Promise<number> {
   const candidates = entries.map((item: any) => {
     const url = String(item.url || "").trim();
@@ -966,29 +1016,21 @@ async function upsertFeedVideos(env: Env, source: any, entries: any[]): Promise<
   }).filter(Boolean) as any[];
   if (!candidates.length) return 0;
 
-  const externalIds = Array.from(new Set(candidates.map((item: any) => item.external)));
-  const placeholders = externalIds.map((_value, index) => "?" + (index + 2)).join(",");
-  const articleRows = await env.DB.prepare(
-    "SELECT id,external_id FROM articles WHERE source_id=?1 AND external_id IN (" + placeholders + ")"
-  ).bind(source.id, ...externalIds).all();
-  const articleByExternal = new Map<string, string>();
-  for (const row of (articleRows.results || []) as any[]) articleByExternal.set(String(row.external_id), String(row.id));
-
   const now = new Date().toISOString();
   const statements: any[] = [];
   for (const candidate of candidates) {
     const digest = await sha(candidate.external);
-    const slug = slugify(String(source.slug || "publisher") + "-" + digest.slice(0, 16));
+    const slug = slugify(String(source.slug || "publisher-video") + "-" + digest.slice(0, 16));
     const title = cleanHtml(candidate.item.title).slice(0, 800) || "Publisher video";
     const description = cleanHtml(candidate.item.summary || candidate.item.content).slice(0, 5000) || null;
     const published = safeDate(candidate.item.published);
     statements.push(env.DB.prepare(
       "INSERT INTO videos (id,title,slug,description,video_url,youtube_url,thumbnail_url,duration_seconds,article_id,status,published_at,created_at,updated_at) " +
-      "VALUES (?1,?2,?3,?4,?5,?5,?6,NULL,?7,'published',?8,?9,?9) " +
-      "ON CONFLICT(slug) DO UPDATE SET title=excluded.title,description=excluded.description,video_url=excluded.video_url,youtube_url=excluded.youtube_url,thumbnail_url=COALESCE(excluded.thumbnail_url,videos.thumbnail_url),article_id=COALESCE(excluded.article_id,videos.article_id),status='published',published_at=excluded.published_at,updated_at=excluded.updated_at"
+      "VALUES (?1,?2,?3,?4,?5,?5,?6,NULL,NULL,'published',?7,?8,?8) " +
+      "ON CONFLICT(slug) DO UPDATE SET title=excluded.title,description=excluded.description,video_url=excluded.video_url,youtube_url=excluded.youtube_url,thumbnail_url=COALESCE(excluded.thumbnail_url,videos.thumbnail_url),status='published',published_at=excluded.published_at,updated_at=excluded.updated_at"
     ).bind(
       crypto.randomUUID(), title, slug, description, candidate.url,
-      candidate.image, articleByExternal.get(candidate.external) || null, published, now
+      candidate.image, published, now
     ));
   }
   if (statements.length) await env.DB.batch(statements);
@@ -1010,12 +1052,13 @@ async function runFeedSync(env: Env, requestedSourceSlug?: string) {
   try {
     await env.DB.prepare("INSERT INTO worker_runs(id,trigger,status,started_at) VALUES (?1,'cron','running',?2)").bind(runId, started).run();
     runCreated = true;
+    await ensurePublisherVideoSources(env);
     const sourceFilter = " WHERE enabled=1 AND ((source_type='rss' AND feed_url IS NOT NULL) OR (source_type='api' AND ((api_secret_name='NEWS_API_KEY' AND ?1=1) OR (api_secret_name='GUARDIAN_API_KEY' AND ?2=1))))";
     const sourceStatement = requestedSourceSlug
       // Explicit source sync should include the selected enabled row even when
       // its feed/API configuration is broken, so the source error is recorded.
       ? env.DB.prepare("SELECT * FROM news_sources WHERE enabled=1 AND slug=?1 ORDER BY name").bind(requestedSourceSlug)
-      : env.DB.prepare("SELECT * FROM news_sources" + sourceFilter + " ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0);
+      : env.DB.prepare("SELECT * FROM news_sources" + sourceFilter + " ORDER BY CASE WHEN slug LIKE '%-video' THEN 0 ELSE 1 END, CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END, last_synced_at ASC, name LIMIT 6").bind(env.NEWS_API_KEY ? 1 : 0, env.GUARDIAN_API_KEY ? 1 : 0);
     const sources = await sourceStatement.all();
     let fetched = 0, added = 0, updated = 0, skipped = 0, errors = 0;
     const categoryCache = new Map<string, string>();
@@ -1024,9 +1067,12 @@ async function runFeedSync(env: Env, requestedSourceSlug?: string) {
       try {
         const entries = (await fetchSourceEntries(source, env)).slice(0, 12);
         fetched += entries.length;
-        const category = await resolveCategory(env, String(source.default_category || "World"), categoryCache);
-        const counts = await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
-        const videosSaved = isPublisherVideoSource(source) ? await upsertFeedVideos(env, source, entries) : 0;
+        const isVideoSource = isPublisherVideoSource(source);
+        const category = isVideoSource ? null : await resolveCategory(env, String(source.default_category || "World"), categoryCache);
+        const counts = isVideoSource
+          ? { inserted: 0, updated: 0, skipped: entries.length }
+          : await upsertFeedArticles(env, source, entries, category.id, category.createStatement);
+        const videosSaved = isVideoSource ? await upsertFeedVideos(env, source, entries) : 0;
         added += counts.inserted;
         updated += counts.updated;
         skipped += counts.skipped;
