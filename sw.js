@@ -16,7 +16,7 @@ self.addEventListener('notificationclick',event=>{
 
 // Bump this cache when the public shell changes. This deliberately discards
 // the old potentially unstyled homepage cached by previous mobile/PWA sessions.
-const LK_PUBLIC_CACHE='lk-newsroom-public-shell-v3';
+const LK_PUBLIC_CACHE='lk-newsroom-public-shell-v4';
 const LK_SHELL_ASSETS=[
   '/',
   '/manifest.webmanifest',
