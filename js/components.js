@@ -1,9 +1,8 @@
 import { categories } from './data.js';
 
-const root = () => document.body.dataset.root || '.';
-const link = (path) => `${root()}/${path}`;
+const link = (path) => `/${String(path || '').replace(/^\\/+/, '')}`;
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const categoryUrl=name=>link(`category/${String(name).toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}`);
+const categoryUrl=name=>`/category/${String(name).normalize('NFKD').toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}`;
 
 /** Every story card has a single, full-card link to its own canonical /news/:id route. */
 export function articleCard(article, compact = false) {
