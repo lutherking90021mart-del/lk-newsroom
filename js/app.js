@@ -39,7 +39,12 @@ const categoryDetails={
   opinion:{title:'Opinion',subtitle:'Thoughtful commentary, analysis and perspectives on the issues that matter.'},
   latest:{title:'Latest News',subtitle:'The newest verified reporting, analysis and explainers from LK Newsroom.'}
 };
-function selectedCategory(){const route=location.pathname.match(/^\/category\/([^/]+)\/?$/);const requested=route?decodeURIComponent(route[1]):query.get('category')||document.body.dataset.category||'Latest';return categories.find(([name])=>categorySlug(name)===categorySlug(requested))?.[0]||'Latest';}
+function selectedCategory(){
+  const route=location.pathname.match(/^\/category\/(?:category\/)?([^/]+)\/?$/i);
+  let requested='Latest';
+  try{requested=route?decodeURIComponent(route[1]):(query.get('category')||document.body.dataset.category||'Latest');}catch{requested='Latest';}
+  return categories.find(([name])=>categorySlug(name)===categorySlug(requested))?.[0]||'Latest';
+}
 const relativeTime=date=>{const minutes=Math.max(0,Math.floor((Date.now()-new Date(date).getTime())/60_000));if(minutes<1)return 'Published just now';if(minutes<60)return 'Published '+minutes+' minute'+(minutes===1?'':'s')+' ago';const hours=Math.floor(minutes/60);if(hours<24)return 'Published '+hours+' hour'+(hours===1?'':'s')+' ago';const days=Math.floor(hours/24);return days===1?'Published yesterday':'Published '+days+' days ago';}
 const uiDate=date=>new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date));
 const decodeArticleEntities=value=>{const field=document.createElement('textarea');field.innerHTML=String(value??'');return field.value;};
@@ -205,7 +210,12 @@ function connectLiveUpdates(){
 
 function setTheme(){const saved=localStorage.getItem('lk-theme');if(saved)document.documentElement.dataset.theme=saved;}
 function initShell(){
-  renderHeader(document.body.dataset.page||'');renderBreaking();renderFooter();
+  let activePage=document.body.dataset.page||'';
+  if(document.body.dataset.template==='category'){
+    const match=location.pathname.match(/^\/category\/(?:category\/)?([^/]+)\/?$/i);
+    try{activePage=categorySlug(match?decodeURIComponent(match[1]):(document.body.dataset.category||'Latest'));}catch{activePage='latest';}
+  }
+  renderHeader(activePage);renderBreaking();renderFooter();
   if($('[data-today]'))$('[data-today]').textContent=new Intl.DateTimeFormat('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date());
   document.querySelectorAll('[data-year]').forEach(element=>element.textContent=new Date().getFullYear());
   $('#theme-toggle')?.addEventListener('click',()=>{const next=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=next;localStorage.setItem('lk-theme',next);});
@@ -321,7 +331,7 @@ async function categoryPage(){
   const loadPage=async(nextOffset=0)=>{
     try{
       const params=new URLSearchParams({limit:String(pageSize),offset:String(nextOffset),view:activeView});if(category!=='Latest')params.set('category',categorySlug(category));
-      const response=await fetch(`${aggregatorApi()}/v1/news?${params}`);if(!response.ok)throw new Error('Unable to load category stories.');
+      const response=await fetch(`${aggregatorApi()}/v1/news?${params}`,{cache:'no-store',headers:{accept:'application/json'}});if(!response.ok)throw new Error('Unable to load category stories.');
       const payload=await response.json();if(!Array.isArray(payload.data))throw new Error('Invalid news response.');usingApi=true;return {data:payload.data.filter(row=>!isEntertainmentStory(row)).map(toUiArticle),total:Number(payload.total??payload.data.length)};
     }catch(error){if(configured)throw error;const rows=localStories();return {data:rows.slice(nextOffset,nextOffset+pageSize),total:rows.length};}
   };
