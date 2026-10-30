@@ -993,18 +993,6 @@ async function ensurePublisherVideoSources(env: Env): Promise<void> {
   ));
 }
 
-function isPublisherVideoSource(source: any): boolean {
-  return /(?:^|-)video$/i.test(String(source?.slug || ""));
-}
-
-function youtubeVideoId(item: any): string {
-  const direct = text(item?.videoId).trim();
-  if (direct) return direct.replace(/^yt:video:/i, "");
-  const candidate = String(text(item?.external) + " " + text(item?.url));
-  const match = candidate.match(/(?:yt:video:|[?&]v=|youtu\.be\/|\/(?:shorts|embed|live)\/)([A-Za-z0-9_-]{6,})/i);
-  return match?.[1] || "";
-}
-
 /** Store recent YouTube Atom entries as video cards, without polluting the article feed. */
 async function upsertFeedVideos(env: Env, source: any, entries: any[]): Promise<number> {
   const candidates = entries.map((item: any) => {
