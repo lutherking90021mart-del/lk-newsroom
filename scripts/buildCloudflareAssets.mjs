@@ -50,6 +50,26 @@ async function cacheBustEntryModules(directory) {
 }
 await cacheBustEntryModules(dist);
 
+// Version local ES-module dependencies as well as HTML entrypoints. A stale
+// components.js can prevent the entire homepage module graph from starting,
+// even when app.js itself has a fresh URL.
+async function cacheBustModuleImports(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      await cacheBustModuleImports(path);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".js")) continue;
+    const source = await readFile(path, "utf8");
+    const pattern = /(\bfrom\s*["']|^\s*import\s*["'])(\.{1,2}\/[^"'\s]+\.js)(?:\?[^"'\s]*)?(["'])/gm;
+    const updated = source.replace(pattern, "$1$2?v=" + assetVersion + "$3");
+    if (updated !== source) await writeFile(path, updated, "utf8");
+  }
+}
+await cacheBustModuleImports(resolve(dist, "js"));
+
 // CSS @import files must also be cache-busted. Otherwise global.css could load
 // while its component stylesheets are still being served from an old cache.
 async function cacheBustCssImports(directory) {
