@@ -1,6 +1,6 @@
 import { categories } from './data.js';
 
-const link = (path) => `/${String(path || '').replace(/^\\/+/, '')}`;
+const link = (path) => '/' + String(path || '').split('/').filter(Boolean).join('/');
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const categoryUrl=name=>`/category/${String(name).normalize('NFKD').toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}`;
 
