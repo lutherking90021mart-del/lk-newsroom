@@ -1011,7 +1011,7 @@ async function upsertFeedVideos(env: Env, source: any, entries: any[]): Promise<
     const url = String(item.url || "").trim();
     if (!/^https?:\/\/(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)\//i.test(url)) return null;
     const id = youtubeVideoId(item);
-    const image = String(item.image || "").trim() || (id ? "https://i.ytimg.com/vi/" + encodeURIComponent(id) + "/hqdefault.jpg" : null);
+    const image = id ? "https://i.ytimg.com/vi/" + encodeURIComponent(id) + "/hqdefault.jpg" : String(item.image || "").trim() || null;
     return { item, url, image, external: String(item.external || url).slice(0, 1000) };
   }).filter(Boolean) as any[];
   if (!candidates.length) return 0;
