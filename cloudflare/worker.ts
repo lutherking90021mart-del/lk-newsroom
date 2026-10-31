@@ -678,14 +678,93 @@ async function publicVideos(env: Env, url: URL) {
   const limit = Math.min(48, safeLimit(url.searchParams.get("limit")));
   const requestedFreshDays = Number(url.searchParams.get("freshDays") || 14);
   const freshDays = Number.isFinite(requestedFreshDays) ? Math.min(30, Math.max(1, Math.trunc(requestedFreshDays))) : 14;
-  const rows = await env.DB.prepare(
-    "SELECT v.id,v.title,v.description,v.video_url,v.youtube_url,v.thumbnail_url,v.duration_seconds,v.published_at,v.created_at,s.name AS source_name,s.slug AS source_slug " +
-    "FROM videos v LEFT JOIN news_sources s ON s.slug LIKE '%-video' AND v.slug LIKE s.slug || '-%' " +
-    "WHERE v.status='published' AND COALESCE(v.published_at,v.created_at)>=datetime('now',?1) " +
-    "ORDER BY COALESCE(v.published_at,v.created_at) DESC LIMIT ?2"
-  ).bind("-" + freshDays + " days", limit).all();
-  return json({ data: rows.results || [], updatedAt: new Date().toISOString(), freshnessDays: freshDays, source: "publisher-video-feeds" });
+
+  // Prefer publisher YouTube Atom feeds directly. This keeps the public video
+  // rail available on phones and desktop even when D1 has exhausted its free
+  // daily read quota. Cloudflare's route-level cache limits upstream requests.
+  const cutoff = Date.now() - freshDays * 24 * 60 * 60 * 1000;
+  const feedResults = await Promise.allSettled(PUBLISHER_VIDEO_SOURCES.map(async source => ({
+    source,
+    entries: await parseFeed(source)
+  })));
+  const seen = new Set<string>();
+  const liveVideos: any[] = [];
+  let successfulFeeds = 0;
+
+  for (const result of feedResults) {
+    if (result.status !== "fulfilled") continue;
+    successfulFeeds++;
+    const { source, entries } = result.value;
+    for (const entry of entries) {
+      const videoUrl = String(entry.url || "").trim();
+      if (!/^https?:\/\/(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)\//i.test(videoUrl)) continue;
+      const videoId = youtubeVideoId(entry);
+      const publishedAt = safeDate(entry.published);
+      const publishedTime = Date.parse(publishedAt);
+      if (!Number.isFinite(publishedTime) || publishedTime < cutoff) continue;
+      const dedupeKey = videoId || videoUrl;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      liveVideos.push({
+        id: videoId || "publisher-" + (await sha(videoUrl)).slice(0, 24),
+        title: String(entry.title || "Publisher video").slice(0, 800),
+        description: String(entry.summary || entry.content || "").slice(0, 5000),
+        video_url: videoUrl,
+        youtube_url: videoUrl,
+        thumbnail_url: videoId
+          ? "https://i.ytimg.com/vi/" + encodeURIComponent(videoId) + "/hqdefault.jpg"
+          : (entry.image || null),
+        duration_seconds: null,
+        published_at: publishedAt,
+        created_at: publishedAt,
+        source_name: source.name,
+        source_slug: source.slug
+      });
+    }
+  }
+
+  liveVideos.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
+  if (liveVideos.length) {
+    return json({
+      data: liveVideos.slice(0, limit),
+      updatedAt: new Date().toISOString(),
+      freshnessDays: freshDays,
+      source: "publisher-video-rss",
+      feedsAvailable: successfulFeeds
+    });
+  }
+
+  // Use previously ingested D1 records only when live publisher feeds fail
+  // or have no recent uploads. A D1 quota error must never hide live videos.
+  try {
+    const rows = await env.DB.prepare(
+      "SELECT v.id,v.title,v.description,v.video_url,v.youtube_url,v.thumbnail_url,v.duration_seconds,v.published_at,v.created_at,s.name AS source_name,s.slug AS source_slug " +
+      "FROM videos v LEFT JOIN news_sources s ON s.slug LIKE '%-video' AND v.slug LIKE s.slug || '-%' " +
+      "WHERE v.status='published' AND COALESCE(v.published_at,v.created_at)>=datetime('now',?1) " +
+      "ORDER BY COALESCE(v.published_at,v.created_at) DESC LIMIT ?2"
+    ).bind("-" + freshDays + " days", limit).all();
+    if ((rows.results || []).length || successfulFeeds) {
+      return json({
+        data: rows.results || [],
+        updatedAt: new Date().toISOString(),
+        freshnessDays: freshDays,
+        source: successfulFeeds ? "publisher-video-rss-empty" : "stored-publisher-videos",
+        feedsAvailable: successfulFeeds
+      });
+    }
+  } catch (error) {
+    console.error("D1 video fallback unavailable; publisher video feeds also failed.", error instanceof Error ? error.message : String(error));
+  }
+
+  return json({
+    data: [],
+    updatedAt: new Date().toISOString(),
+    freshnessDays: freshDays,
+    source: "publisher-video-unavailable",
+    feedsAvailable: successfulFeeds
+  }, successfulFeeds ? 200 : 503);
 }
+
 async function publicBreaking(env: Env) {
   const rows = await env.DB.prepare("SELECT b.id,b.headline,b.link_url,b.starts_at,b.pinned,a.id AS article_id,a.original_url FROM breaking_news b LEFT JOIN articles a ON a.id=b.article_id WHERE b.active=1 AND (b.ends_at IS NULL OR b.ends_at>datetime('now')) ORDER BY b.pinned DESC,b.starts_at DESC LIMIT 8").all();
   return json({ data: (rows.results || []).map((r: any) => ({ ...r, articles: r.article_id ? { id: r.article_id, original_url: r.original_url } : null })), updatedAt: new Date().toISOString() });
