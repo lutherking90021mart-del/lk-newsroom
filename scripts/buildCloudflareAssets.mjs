@@ -7,7 +7,7 @@ const dist = resolve(root, "dist");
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 
-const rootFiles = ["index.html", "404.html", "ads.txt", "manifest.webmanifest", "pwa-install.js", "sw.js"];
+const rootFiles = ["index.html", "404.html", "ads.txt", "robots.txt", "sitemap.xml", "manifest.webmanifest", "pwa-install.js", "sw.js"];
 for (const name of rootFiles) {
   try { await cp(resolve(root, name), resolve(dist, name)); }
   catch (error) { if (error && error.code !== "ENOENT") throw error; }
