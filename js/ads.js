@@ -133,11 +133,11 @@ export async function hydrateAdSlots(options = {}) {
   // video-only pages must not be treated as ad-supported editorial articles.
   const pageType = document.body.dataset.template || '';
   if (pageType === 'home') {
-    if (!document.querySelector('[data-original-editorial]')) return;
+    if (!document.querySelector('[data-editorial-review-passed]')) return;
   } else if (pageType === 'article') {
     if (options.allowArticleAds !== true) return;
   } else if (pageType === 'feature') {
-    if (options.allowFeatureAds !== true || !document.querySelector('.lk-original-explainer[data-original-editorial]')) return;
+    if (options.allowFeatureAds !== true || !document.querySelector('.lk-original-explainer[data-editorial-review-passed]')) return;
   } else {
     return;
   }
