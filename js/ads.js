@@ -127,7 +127,20 @@ function maybePopup(campaigns, clientId) {
 }
 
 /** Renders safe direct, sponsored, or AdSense campaigns from the Supabase ads table. */
-export async function hydrateAdSlots() {
+export async function hydrateAdSlots(options = {}) {
+  // AdSense placements are restricted to screens with substantial publisher
+  // value. Short syndicated briefs, category feeds, utility/legal pages and
+  // video-only pages must not be treated as ad-supported editorial articles.
+  const pageType = document.body.dataset.template || '';
+  if (pageType === 'home') {
+    if (!document.querySelector('[data-original-editorial]')) return;
+  } else if (pageType === 'article') {
+    if (options.allowArticleAds !== true) return;
+  } else if (pageType === 'feature') {
+    if (options.allowFeatureAds !== true || !document.querySelector('.lk-original-explainer[data-original-editorial]')) return;
+  } else {
+    return;
+  }
   loadStyles();
   const campaigns = await fetchCampaigns();
   if (!campaigns.length) return;
