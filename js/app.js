@@ -187,7 +187,7 @@ function openVideoPlayer(url,title){if(!url)return;closeVideoPlayer();document.b
 const videoCard=video=>{const external=Boolean(video.url);const href=video.url||link('pages/video-news.html');const target=external?'target="_blank" rel="noopener noreferrer"':'';const source=video.source||'LK Newsroom';const time=video.publishedAt?relativeTime(video.publishedAt):'';return `<article class="publisher-video"><a class="video-card" href="${esc(href)}" ${target} aria-label="Watch ${esc(video.title)}"><img src="${esc(video.image||fallbackImage())}" alt="" loading="lazy" onerror="this.src='${fallbackImage()}'"><span class="play-button"><i class="fa-solid fa-play"></i></span></a><span class="eyebrow">${esc(source)}</span><h3 class="headline"><a href="${esc(href)}" ${target}>${esc(video.title)}</a></h3>${video.description?`<p class="text-muted video-description">${esc(video.description)}</p>`:''}<span class="meta">${esc(source)}${time?` · ${esc(time)}`:''}</span></article>`;};
 const videoEmptyState=()=>`<div class="empty-state video-empty-state"><i class="fa-solid fa-circle-play fa-2x"></i><p>${videoFeedLoaded?'No recent publisher videos are available right now. This section refreshes as enabled video feeds publish new reports.':'The latest publisher video feed is temporarily unavailable. Please check back shortly.'}</p></div>`;
 async function refreshBreaking(){try{const response=await fetch(`${aggregatorApi()}/v1/breaking`);if(!response.ok)return;const payload=await response.json();if(payload.data?.length)renderBreaking(payload.data);}catch{}}
-async function loadAdvertisements(){const slots=[...document.querySelectorAll('.ad-slot')];if(!slots.length)return;try{const rows=await newsApi.advertisements(30);if(!rows.length)return;slots.forEach((slot,index)=>{const placement=slot.dataset.adPlacement||(document.body.dataset.template==='article'?'article-sidebar':'homepage-sidebar');const matches=rows.filter(ad=>ad.placement===placement);const ad=(matches.length?matches:rows)[index%(matches.length||rows.length)];const image=ad.image_url?`<img src="${esc(ad.image_url)}" alt="${esc(ad.name)}" loading="lazy">`:'';const target=ad.target_url||'#';slot.innerHTML=`<span class="ad-label">Sponsored</span><a class="ad-link" href="${esc(target)}" ${ad.target_url?'target="_blank" rel="sponsored noopener"':''}>${image}<strong>${esc(ad.name)}</strong>${ad.html_content?`<span>${esc(ad.html_content)}</span>`:''}</a>`;void newsApi.trackAdvertisement(ad.id,'impression').catch(()=>{});slot.querySelector('.ad-link')?.addEventListener('click',()=>void newsApi.trackAdvertisement(ad.id,'click').catch(()=>{}));});}catch(error){console.warn('Could not load advertisements',error);}}
+async function loadAdvertisements(){if(document.body.dataset.template!=='home'||!document.querySelector('[data-original-editorial]'))return;const slots=[...document.querySelectorAll('.ad-slot')];if(!slots.length)return;try{const rows=await newsApi.advertisements(30);if(!rows.length)return;slots.forEach((slot,index)=>{const placement=slot.dataset.adPlacement||(document.body.dataset.template==='article'?'article-sidebar':'homepage-sidebar');const matches=rows.filter(ad=>ad.placement===placement);const ad=(matches.length?matches:rows)[index%(matches.length||rows.length)];const image=ad.image_url?`<img src="${esc(ad.image_url)}" alt="${esc(ad.name)}" loading="lazy">`:'';const target=ad.target_url||'#';slot.innerHTML=`<span class="ad-label">Sponsored</span><a class="ad-link" href="${esc(target)}" ${ad.target_url?'target="_blank" rel="sponsored noopener"':''}>${image}<strong>${esc(ad.name)}</strong>${ad.html_content?`<span>${esc(ad.html_content)}</span>`:''}</a>`;void newsApi.trackAdvertisement(ad.id,'impression').catch(()=>{});slot.querySelector('.ad-link')?.addEventListener('click',()=>void newsApi.trackAdvertisement(ad.id,'click').catch(()=>{}));});}catch(error){console.warn('Could not load advertisements',error);}}
 function connectLiveUpdates(){
   if(configured){
     subscribeRealtime('articles',async payload=>{if(payload.eventType==='INSERT'&&payload.new?.status==='published'){await hydrateNews();toast('A new verified story is live.');}});
@@ -227,8 +227,8 @@ function initShell(){
   mobileMenu?.querySelectorAll('a').forEach(item=>item.addEventListener('click',()=>setMobileMenu(false)));
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){setMobileMenu(false);closeVideoPlayer();}});
   document.addEventListener('click',event=>{if(event.target.closest('[data-close-video-player]')){event.preventDefault();closeVideoPlayer();return;}const link=event.target.closest('.publisher-video a');if(!link)return;const card=link.closest('.publisher-video');const source=card?.querySelector('.video-card')?.getAttribute('href')||'';if(!/^https?:/i.test(source))return;event.preventDefault();openVideoPlayer(source,card?.querySelector('h3')?.textContent?.trim()||'LK Newsroom video');});
-  document.addEventListener('submit',async event=>{if(!event.target.matches('[data-newsletter-form]'))return;event.preventDefault();const email=$('input',event.target).value;try{const {subscribe}=await import('./supabase-client.js');await subscribe(email);}catch{}event.target.reset();toast("You're subscribed to the LK Daily Brief.");});
-  document.addEventListener('submit',event=>{if(!event.target.matches('[data-contact-form]'))return;event.preventDefault();event.target.reset();toast('Thanks — your message has been sent to LK Newsroom.');});
+  document.addEventListener('submit',async event=>{if(!event.target.matches('[data-newsletter-form]'))return;event.preventDefault();const form=event.target;const email=$('input[type="email"]',form)?.value?.trim()||'';const button=form.querySelector('button[type="submit"],button:not([type])');if(button)button.disabled=true;try{const response=await fetch(`${aggregatorApi()}/v1/newsletter`,{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({email})});const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload.error||'We could not save your subscription. Please try again.');form.reset();toast("You're subscribed to the LK Daily Brief.");}catch(error){toast(error.message||'Subscription failed. Please try again.');}finally{if(button)button.disabled=false;}});
+
   if(window.AOS)AOS.init({once:true,offset:35,duration:520});
 }
 function renderHero(stories=feed.slice(0,3)){
@@ -381,7 +381,12 @@ async function articlePage(){
   target.innerHTML='<div class="container section"><div class="spinner"></div></div>';
   try{
     const payload=await getArticle(identifier);const article=toUiArticle(payload.data);document.title=`${article.title} | LK Newsroom`;
-    const original=article.source?`<p class="article-source-reference"><strong>Source:</strong> ${esc(decodeArticleEntities(article.source))}</p>`:'';
+    const isSyndicated=Boolean(Number(article.raw?.is_aggregated||0))||Boolean(article.raw?.is_live_rss_fallback)||Boolean(article.raw?.external_id);
+    const robotsMeta=document.querySelector('meta[name="robots"]');if(robotsMeta)robotsMeta.content=isSyndicated?'noindex,follow':'index,follow,max-image-preview:large';
+    let canonical=document.querySelector('link[rel="canonical"]');if(!canonical){canonical=document.createElement('link');canonical.rel='canonical';document.head.append(canonical);}canonical.href=location.origin+location.pathname;
+    const descriptionMeta=document.querySelector('meta[name="description"]');if(descriptionMeta)descriptionMeta.content=article.excerpt||article.title;
+    const sourceUrl=article.originalUrl&&/^https?:\/\//i.test(article.originalUrl)?article.originalUrl:'';
+    const original=article.source?`<p class="article-source-reference"><strong>Publisher:</strong> ${esc(decodeArticleEntities(article.source))}${sourceUrl?` · <a href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">Read the original report</a>`:''}</p>`:'';
     const sponsor=article.sponsor?`<aside class="sponsored-disclosure"><span>Sponsored</span><strong>Paid partnership with ${article.sponsor.sponsor_url?`<a href="${esc(article.sponsor.sponsor_url)}" target="_blank" rel="sponsored noopener">${esc(article.sponsor.sponsor_name)}</a>`:esc(article.sponsor.sponsor_name)}</strong>${article.sponsor.campaign_details?`<p>${esc(article.sponsor.campaign_details)}</p>`:''}</aside>`:'';
     const tags=(article.tags||[]).map(tag=>`<span class="tag">${esc(tag)}</span>`).join('')||`<span class="tag">${esc(article.category)}</span>`;
     const excerptText=decodeArticleEntities(article.excerpt||'').trim();
@@ -393,13 +398,15 @@ async function articlePage(){
     const aiSummary=decodeArticleEntities(article.raw?.ai_summary||'').trim();
     const summaryKey=normalizeArticleText(aiSummary);
     const additionalContext=aiSummary&&summaryKey!==articleTextKey&&summaryKey!==excerptKey ? '<section class="article-ai-summary"><h2>Additional context</h2>'+paragraphs(aiSummary)+'</section>' : '';
-    const storyBodyHtml=paragraphs(articleText)||(!additionalContext?'<p class="article-content-note">The full story text is not available in the current publisher feed yet. LK Newsroom will add further details when verified reporting is available.</p>':'');
+    const storyBodyHtml=paragraphs(articleText)||(!additionalContext?(isSyndicated?'<p class="article-content-note">This is a short publisher brief. The original publisher link below contains the full report and its additional context.</p>':'<p class="article-content-note">The full story text is not available yet. Please check back for an update.</p>'):'');
+    const originDisclosure=isSyndicated?`<aside class="article-origin-note"><strong>External publisher brief</strong><p>This item summarises material from an external publisher. It is not presented as first-hand reporting by an LK Newsroom correspondent. Please use the publisher link below for the full report and any later updates.</p></aside>`:'';
     const comments=payload.comments||[];
-    target.innerHTML=`<div class="container"><header class="article-header"><span class="eyebrow">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p class="text-muted">${esc(article.excerpt)}</p><div class="article-byline"><div class="author">${sourceMark(article.source)}<div><strong>${esc(article.author)}</strong><div class="meta">${esc(article.source)}</div></div></div><div class="meta"><i class="fa-regular fa-calendar"></i> ${esc(article.date)} &nbsp; <i class="fa-regular fa-clock"></i> ${article.reading} min read &nbsp; <i class="fa-regular fa-eye"></i> ${article.views.toLocaleString()} views</div></div></header><img class="article-featured" src="${esc(article.image)}" alt="" fetchpriority="high" onerror="this.src='${fallbackImage()}'"><div class="article-body"><div class="share-row"><strong>Share</strong><button class="icon-button" data-share aria-label="Share article"><i class="fa-solid fa-share-nodes"></i></button><button class="icon-button" data-copy-link aria-label="Copy article link"><i class="fa-solid fa-link"></i></button></div>${storyBodyHtml}${additionalContext}${original}${mediaSection(payload.gallery,'gallery')}${mediaSection(payload.videos,'video')}<div class="tags">${tags}</div><nav class="article-nav">${payload.previous?`<a href="/news/${encodeURIComponent(payload.previous.id)}"><span class="eyebrow">Previous</span><br>${esc(payload.previous.title)}</a>`:'<span></span>'}${payload.next?`<a href="/news/${encodeURIComponent(payload.next.id)}"><span class="eyebrow">Next</span><br>${esc(payload.next.title)}</a>`:'<span></span>'}</nav></div><section class="comments"><h2>Comments <small class="text-muted">(${comments.length})</small></h2><div id="approved-comments">${comments.length?comments.map(comment=>`<article class="comment"><strong>${esc(comment.display_name||'LK Reader')}</strong><span class="meta">${esc(relativeTime(comment.created_at))}</span><p>${esc(comment.body)}</p></article>`).join(''):'<p class="text-muted">No approved comments yet. Be the first to join the conversation.</p>'}</div><form class="form-card" data-comment-form><div class="form-group"><label for="comment-name">Name</label><input id="comment-name" class="form-control" required maxlength="80" placeholder="Your name"></div><div class="form-group"><label for="comment">Join the conversation</label><textarea id="comment" class="form-control" rows="3" required maxlength="5000" placeholder="Write a respectful comment"></textarea></div><button class="btn btn-primary">Post comment</button></form></section></div>`;
+    target.innerHTML=`<div class="container"><header class="article-header"><span class="eyebrow">${esc(article.category)}</span><h1>${esc(article.title)}</h1><p class="text-muted">${esc(article.excerpt)}</p><div class="article-byline"><div class="author">${sourceMark(article.source)}<div><strong>${esc(isSyndicated?'External publisher brief':article.author)}</strong><div class="meta">${esc(article.source||'LK Newsroom')}</div></div></div><div class="meta"><i class="fa-regular fa-calendar"></i> ${esc(article.date)} &nbsp; <i class="fa-regular fa-clock"></i> ${article.reading} min read &nbsp; <i class="fa-regular fa-eye"></i> ${article.views.toLocaleString()} views</div></div></header><img class="article-featured" src="${esc(article.image)}" alt="" fetchpriority="high" onerror="this.src='${fallbackImage()}'"><div class="article-body"><div class="share-row"><strong>Share</strong><button class="icon-button" data-share aria-label="Share article"><i class="fa-solid fa-share-nodes"></i></button><button class="icon-button" data-copy-link aria-label="Copy article link"><i class="fa-solid fa-link"></i></button></div>${originDisclosure}${storyBodyHtml}${additionalContext}${original}${mediaSection(payload.gallery,'gallery')}${mediaSection(payload.videos,'video')}<div class="tags">${tags}</div><nav class="article-nav">${payload.previous?`<a href="/news/${encodeURIComponent(payload.previous.id)}"><span class="eyebrow">Previous</span><br>${esc(payload.previous.title)}</a>`:'<span></span>'}${payload.next?`<a href="/news/${encodeURIComponent(payload.next.id)}"><span class="eyebrow">Next</span><br>${esc(payload.next.title)}</a>`:'<span></span>'}</nav></div><section class="comments"><h2>Comments <small class="text-muted">(${comments.length})</small></h2><div id="approved-comments">${comments.length?comments.map(comment=>`<article class="comment"><strong>${esc(comment.display_name||'LK Reader')}</strong><span class="meta">${esc(relativeTime(comment.created_at))}</span><p>${esc(comment.body)}</p></article>`).join(''):'<p class="text-muted">No approved comments yet. Be the first to join the conversation.</p>'}</div><form class="form-card" data-comment-form><div class="form-group"><label for="comment-name">Name</label><input id="comment-name" class="form-control" required maxlength="80" placeholder="Your name"></div><div class="form-group"><label for="comment">Join the conversation</label><textarea id="comment" class="form-control" rows="3" required maxlength="5000" placeholder="Write a respectful comment"></textarea></div><button class="btn btn-primary">Post comment</button></form></section></div>`;
     if(article.sponsor)$('.article-body',target)?.insertAdjacentHTML('afterbegin',sponsor);
     // Article body arrives after the initial page shell; mount inline campaigns now so
     // a booked between-paragraph placement has a real article paragraph to attach to.
-    void hydrateAdSlots();
+    const allowArticleAds=!isSyndicated&&articleText.length>=1200&&Boolean(article.raw?.content_markdown||article.raw?.content);
+    void hydrateAdSlots({allowArticleAds});
     trackArticleOpen(article.id);
     const related=$('#related-news');if(related)related.innerHTML=(payload.related||[]).map(row=>articleCard(toUiArticle(row))).join('')||'<p class="text-muted">More related reporting will appear here soon.</p>';
     const relatedHeading=$('#related-source-heading');if(relatedHeading)relatedHeading.textContent=`More from ${article.source}`;
@@ -454,6 +461,7 @@ function mediaPage(type){
 }
 function staticPage(){
   const page=document.body.dataset.static;
+  if(['about','contact','privacy','terms','editorial','corrections'].includes(page))return;
   const pages={
     about:{
       title:'About LK Newsroom',
@@ -494,7 +502,18 @@ function staticPage(){
 document.addEventListener('DOMContentLoaded',()=>{
   setTheme();initShell();void initWeather();
   const type=document.body.dataset.template;
-  void hydrateAdSlots();void trackPageView();
+  void trackPageView();
+  if(type==='static'){
+    if(document.body.dataset.static==='advertise')void mountAdvertiseMarketplace();
+    else if(document.body.dataset.static==='support')void mountSupportPage();
+    else staticPage();
+    return;
+  }
+  if(type==='feature'){
+    void hydrateAdSlots({allowFeatureAds:true});
+    return;
+  }
+  void hydrateAdSlots();
   if(type==='home'){
     // Paint immediately with this browser's last successful feed, if available.
     restoreCachedNews();
@@ -514,13 +533,12 @@ document.addEventListener('DOMContentLoaded',()=>{
     void loadAdvertisements();
     return;
   }
-  void Promise.all([hydrateNews(),hydrateVideos(),refreshBreaking(),loadAdvertisements()]).then(async()=>{
+  void Promise.all([hydrateNews(),hydrateVideos(),refreshBreaking()]).then(async()=>{
     connectLiveUpdates();
     if(type==='category')await categoryPage();
     if(type==='article')await articlePage();
     if(type==='search')searchPage();
     if(type==='live')livePage();
     if(type==='media')mediaPage(document.body.dataset.media);
-    if(type==='static'){if(document.body.dataset.static==='advertise')await mountAdvertiseMarketplace();else if(document.body.dataset.static==='support')await mountSupportPage();else staticPage();}
   }).catch(error=>console.warn('Could not initialise page content.',error));
 });

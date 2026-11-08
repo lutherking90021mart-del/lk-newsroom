@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /v1/
+Disallow: /api/
+
+Sitemap: https://lknewsroom.online/sitemap.xml
