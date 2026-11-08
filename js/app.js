@@ -381,7 +381,7 @@ async function articlePage(){
   target.innerHTML='<div class="container section"><div class="spinner"></div></div>';
   try{
     const payload=await getArticle(identifier);const article=toUiArticle(payload.data);document.title=`${article.title} | LK Newsroom`;
-    const isSyndicated=Boolean(Number(article.raw?.is_aggregated||0))||Boolean(article.raw?.is_live_rss_fallback)||Boolean(article.raw?.external_id)||Boolean(article.raw?.source_id);
+    const isSyndicated=Boolean(Number(article.raw?.is_aggregated||0))||Boolean(article.raw?.is_live_rss_fallback)||Boolean(article.raw?.external_id);
     const robotsMeta=document.querySelector('meta[name="robots"]');if(robotsMeta)robotsMeta.content=isSyndicated?'noindex,follow':'index,follow,max-image-preview:large';
     let canonical=document.querySelector('link[rel="canonical"]');if(!canonical){canonical=document.createElement('link');canonical.rel='canonical';document.head.append(canonical);}canonical.href=location.origin+location.pathname;
     const descriptionMeta=document.querySelector('meta[name="description"]');if(descriptionMeta)descriptionMeta.content=article.excerpt||article.title;
