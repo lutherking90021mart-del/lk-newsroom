@@ -18,46 +18,17 @@ export function renderHeader(active = '') {
   if (!header) return;
   header.innerHTML = `<a class="skip-link" href="#main-content">Skip to content</a><div class="topbar"><div class="container"><span><i class="fa-regular fa-calendar"></i> <span data-today></span></span><div class="topbar-links"><a href="${link('pages/about.html')}">About</a><a href="${link('pages/contact.html')}">Contact</a><a href="${link('pages/company.html')}">Company Hub</a><a href="${link('pages/advertise.html')}">Advertise</a></div></div></div><header class="site-header"><div class="container header-main"><a href="${link('index.html')}" aria-label="LK Newsroom home"><img class="brand" src="${link('assets/lk-newsroom-logo.svg')}" alt="LK Newsroom"></a><nav class="primary-nav" aria-label="Primary navigation">${links}</nav><div class="header-actions"><a class="icon-button" href="${link('pages/search.html')}" aria-label="Search"><i class="fa-solid fa-magnifying-glass"></i></a><a class="icon-button header-user" href="${link('pages/notifications.html')}" aria-label="Your notification settings"><i class="fa-regular fa-user"></i></a><button class="icon-button theme-button" id="theme-toggle" aria-label="Toggle dark mode"><i class="fa-regular fa-moon"></i></button><button class="icon-button menu-button" id="menu-toggle" aria-label="Open navigation menu" aria-controls="mobile-menu" aria-expanded="false"><i class="fa-solid fa-bars"></i></button></div></div><button class="mobile-menu-backdrop" id="mobile-menu-backdrop" aria-label="Close navigation menu" tabindex="-1"></button><nav class="mobile-menu" id="mobile-menu" aria-label="Mobile navigation"><div class="mobile-menu__heading"><strong>Explore LK Newsroom</strong><button class="icon-button" id="menu-close" aria-label="Close navigation menu"><i class="fa-solid fa-xmark"></i></button></div>${links}<a href="${link('pages/live.html')}"><span class="badge">Live</span> Live updates</a></nav></header>`;
 
-  // Mount the first-party LK Assistant Contact Hub on every page using the shared header.
-  if (!document.getElementById('lk-assistant-launch')) {
-    const assistant = document.createElement('div');
-    assistant.id = 'lk-assistant-root';
-    assistant.innerHTML = `
-      <button class="lk-assistant-launch" id="lk-assistant-launch" type="button" aria-controls="lk-assistant-panel" aria-expanded="false"><span aria-hidden="true">●</span> Ask LK Assistant</button>
-      <section class="lk-assistant-panel" id="lk-assistant-panel" role="dialog" aria-label="LK Newsroom assistant" aria-modal="false" aria-hidden="true">
-        <div class="lk-assistant-head"><div><strong>✧ LK Assistant</strong><small>AI-powered answers · Human handoff available</small></div><button class="lk-assistant-close" id="lk-assistant-close" type="button" aria-label="Close chat">×</button></div>
-        <div class="lk-assistant-messages" id="lk-assistant-messages" aria-live="polite"><div class="lk-assistant-bubble bot">Akwaaba! 👋 I’m the LK Newsroom assistant. Ask about advertising, payments, contacting the team, news coverage, or choose a quick topic below.</div></div>
-        <div class="lk-assistant-quick"><button type="button" data-lk-question="How do I advertise with LK Newsroom?">Advertising</button><button type="button" data-lk-question="How do payments work?">Payment details</button><button type="button" data-lk-question="How do I contact the team?">Contact team</button><button type="button" data-lk-question="I want to speak to a human administrator.">Talk to admin</button></div>
-        <form class="lk-assistant-input" id="lk-assistant-form"><input id="lk-assistant-text" aria-label="Type your question" placeholder="Type your question..." autocomplete="off" maxlength="1200" required><button type="submit" aria-label="Send message">↑</button></form>
-      </section>`;
-    document.body.appendChild(assistant);
-    const panel=assistant.querySelector('#lk-assistant-panel');
-    const launch=assistant.querySelector('#lk-assistant-launch');
-    const close=assistant.querySelector('#lk-assistant-close');
-    const messages=assistant.querySelector('#lk-assistant-messages');
-    const form=assistant.querySelector('#lk-assistant-form');
-    const input=assistant.querySelector('#lk-assistant-text');
-    const handoff='https://wa.me/233559627349?text='+encodeURIComponent('Hello LK Newsroom team, I need help from an administrator.');
-    const toggle=open=>{panel.classList.toggle('open',open);panel.setAttribute('aria-hidden',String(!open));launch.setAttribute('aria-expanded',String(open));if(open)setTimeout(()=>input.focus(),60);};
-    launch.addEventListener('click',()=>toggle(!panel.classList.contains('open')));
-    close.addEventListener('click',()=>toggle(false));
-    const bubble=(value,who)=>{const node=document.createElement('div');node.className='lk-assistant-bubble '+who;node.textContent=value;messages.appendChild(node);messages.scrollTop=messages.scrollHeight;return node;};
-    const handoffLink=()=>{const a=document.createElement('a');a.className='lk-assistant-handoff';a.href=handoff;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Talk to an administrator on WhatsApp';messages.appendChild(a);messages.scrollTop=messages.scrollHeight;};
-    const send=async raw=>{
-      const question=String(raw||'').trim();if(!question)return;
-      bubble(question,'user');
-      if(/admin|human|person|whatsapp|staff|speak to|talk to/i.test(question)){bubble('I can connect you with the LK Newsroom team on WhatsApp.','bot');handoffLink();return;}
-      const pending=bubble('One moment…','bot');
-      try{
-        const api=String(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'');
-        const response=await fetch(api+'/v1/company/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:question})});
-        const data=await response.json();pending.remove();
-        if(response.ok&&data.answer){bubble(data.answer,'bot');return;}
-        bubble(data.error||'The assistant is temporarily unavailable. Please try again or contact our team.','bot');handoffLink();
-      }catch(error){pending.remove();bubble('I could not reach the assistant service just now. Please try again or contact our team on WhatsApp.','bot');handoffLink();}
-    };
-    form.addEventListener('submit',event=>{event.preventDefault();const value=input.value;input.value='';send(value);});
-    assistant.querySelectorAll('[data-lk-question]').forEach(button=>button.addEventListener('click',()=>send(button.dataset.lkQuestion)));
+  // Load the official Tawk.to widget supplied by the LK Newsroom account.
+  if (!window.__lkTawkWidgetLoaded) {
+    window.__lkTawkWidgetLoaded = true;
+    window.Tawk_API = window.Tawk_API || {};
+    window.Tawk_LoadStart = new Date();
+    const tawkScript = document.createElement('script');
+    tawkScript.async = true;
+    tawkScript.src = 'https://embed.tawk.to/6ae3872d11474f347101d681/1k64cg2s8';
+    tawkScript.charset = 'UTF-8';
+    tawkScript.setAttribute('crossorigin', '*');
+    document.head.appendChild(tawkScript);
   }
 }
 
