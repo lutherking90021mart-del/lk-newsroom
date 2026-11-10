@@ -17,6 +17,19 @@ export function renderHeader(active = '') {
   const header = document.querySelector('[data-site-header]');
   if (!header) return;
   header.innerHTML = `<a class="skip-link" href="#main-content">Skip to content</a><div class="topbar"><div class="container"><span><i class="fa-regular fa-calendar"></i> <span data-today></span></span><div class="topbar-links"><a href="${link('pages/about.html')}">About</a><a href="${link('pages/contact.html')}">Contact</a><a href="${link('pages/company.html')}">Company Hub</a><a href="${link('pages/advertise.html')}">Advertise</a></div></div></div><header class="site-header"><div class="container header-main"><a href="${link('index.html')}" aria-label="LK Newsroom home"><img class="brand" src="${link('assets/lk-newsroom-logo.svg')}" alt="LK Newsroom"></a><nav class="primary-nav" aria-label="Primary navigation">${links}</nav><div class="header-actions"><a class="icon-button" href="${link('pages/search.html')}" aria-label="Search"><i class="fa-solid fa-magnifying-glass"></i></a><a class="icon-button header-user" href="${link('pages/notifications.html')}" aria-label="Your notification settings"><i class="fa-regular fa-user"></i></a><button class="icon-button theme-button" id="theme-toggle" aria-label="Toggle dark mode"><i class="fa-regular fa-moon"></i></button><button class="icon-button menu-button" id="menu-toggle" aria-label="Open navigation menu" aria-controls="mobile-menu" aria-expanded="false"><i class="fa-solid fa-bars"></i></button></div></div><button class="mobile-menu-backdrop" id="mobile-menu-backdrop" aria-label="Close navigation menu" tabindex="-1"></button><nav class="mobile-menu" id="mobile-menu" aria-label="Mobile navigation"><div class="mobile-menu__heading"><strong>Explore LK Newsroom</strong><button class="icon-button" id="menu-close" aria-label="Close navigation menu"><i class="fa-solid fa-xmark"></i></button></div>${links}<a href="${link('pages/live.html')}"><span class="badge">Live</span> Live updates</a></nav></header>`;
+
+  // Load the LK Newsroom Tawk.to Contact Hub widget once on every public page.
+  if (!window.__lkTawkWidgetLoaded) {
+    window.__lkTawkWidgetLoaded = true;
+    window.Tawk_API = window.Tawk_API || {};
+    window.Tawk_LoadStart = new Date();
+    const tawkScript = document.createElement('script');
+    tawkScript.async = true;
+    tawkScript.src = 'https://embed.tawk.to/6ae3872d11474f347101d681/1k64cg2s8';
+    tawkScript.charset = 'UTF-8';
+    tawkScript.setAttribute('crossorigin', '*');
+    document.head.appendChild(tawkScript);
+  }
 }
 
 export function renderBreaking(headlines = []) {
