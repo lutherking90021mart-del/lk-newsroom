@@ -60,17 +60,11 @@
 <details class="reveal"><summary>How do I advertise with LK Newsroom?</summary><p>Submit a request on our advertising page. We review it, discuss placement and pricing, and send approved next steps before you pay.</p></details>
 <details class="reveal"><summary>Can I pay before approval?</summary><p>Please do not pay before receiving a confirmed quote or invoice. The team must verify the payment before a campaign is published.</p></details>
 <details class="reveal"><summary>Can I pay from outside Ghana?</summary><p>Ask the team for the available method for your country. Ask the team for the available method for your country; only use payment methods confirmed by LK Newsroom.</p></details>
-<details class="reveal"><summary>Can I talk to a real person?</summary><p>Yes. Open the LK Assistant chat and select “Talk to an administrator on WhatsApp” to hand the conversation to our team.</p></details>
+<details class="reveal"><summary>Can I talk to a real person?</summary><p>Yes. Use the live chat widget to contact the LK Newsroom team. If an agent is unavailable, email lutherking90021mart@gmail.com.</p></details>
 </div></div></section>
 </main>
 <footer class="footer"><div class="wrap footer-inner"><span>© <span id="year"></span> LK Newsroom Global · Lutherking Multimedia</span><span><a href="../index.html">Main newsroom</a> · <a href="advertise.html">Advertise</a> · <a href="contact.html">Contact</a></span></div></footer>
-<button class="chat-launch" id="chat-launch" aria-controls="chat-panel" aria-expanded="false"><i class="fa-solid fa-comments"></i> Ask LK Assistant</button>
-<section class="chat-panel" id="chat-panel" role="dialog" aria-label="LK Newsroom assistant" aria-modal="false">
-<div class="chat-head"><div><strong><i class="fa-solid fa-sparkles"></i> LK Assistant</strong><small>AI-powered answers · Human handoff available</small></div><button class="chat-close" id="chat-close" aria-label="Close chat">×</button></div>
-<div class="chat-messages" id="chat-messages" aria-live="polite"><div class="bubble bot">Akwaaba! 👋 I’m the LK Newsroom assistant. Ask about advertising, payments, contacting the team, or choose a quick topic below.</div></div>
-<div class="quick-actions"><button data-question="How do I advertise?">Advertising</button><button data-question="How do I pay?">Payment details</button><button data-question="How do I contact the team?">Contact team</button><button data-question="Talk to an administrator on WhatsApp">Talk to admin</button></div>
-<form class="chat-input" id="chat-form"><input id="chat-text" aria-label="Type your question" placeholder="Type your question…" autocomplete="off" required><button aria-label="Send message"><i class="fa-solid fa-arrow-up"></i></button></form>
-</section>
+
 <script src="../js/config.js"></script>
 <script>
 (function(){
@@ -83,52 +77,19 @@
  document.querySelectorAll('[data-copy]').forEach(btn=>btn.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(btn.dataset.copy);const old=btn.innerHTML;btn.innerHTML='<i class="fa-solid fa-check"></i> Copied';setTimeout(()=>btn.innerHTML=old,1500)}catch(e){window.prompt('Copy this value:',btn.dataset.copy)}}));
  document.querySelectorAll('[data-prefill]').forEach(a=>a.addEventListener('click',()=>{const topic=$('#topic');if(topic)topic.value=a.dataset.prefill.includes('Advertising')?'Advertising enquiry':'Editorial / news enquiry'}));
  $('#contact-form').addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget;const submit=form.querySelector('button[type="submit"]');const fd=new FormData(form);const payload={name:fd.get('name'),email:fd.get('email'),topic:fd.get('topic'),message:fd.get('message')};const original=submit.innerHTML;submit.disabled=true;submit.textContent='Sending enquiry…';try{const response=await fetch((window.LK_AGGREGATOR_API_URL||location.origin).replace(/\\/$/,'')+'/v1/company/enquiries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not send enquiry');form.reset();submit.innerHTML='<i class="fa-solid fa-check"></i> Enquiry sent';const notice=document.createElement('p');notice.setAttribute('role','status');notice.style.cssText='color:#75e8f5;font-size:13px;margin:12px 0 0';notice.textContent=result.emailSent?'Thanks! Your enquiry was saved and emailed to the LK Newsroom team.':'Thanks! Your enquiry was saved, but email notification is not configured yet. Please use WhatsApp if your message is urgent.';form.querySelector('[role="status"]')?.remove();form.appendChild(notice)}catch(error){const notice=document.createElement('p');notice.setAttribute('role','alert');notice.style.cssText='color:#ffc857;font-size:13px;margin:12px 0 0';notice.textContent=(error instanceof Error?error.message:'Unable to send enquiry')+' You can email lutherking90021mart@gmail.com or use WhatsApp.';form.querySelector('[role="alert"]')?.remove();form.appendChild(notice)}finally{submit.disabled=false;if(submit.textContent==='Sending enquiry…')submit.innerHTML=original}});
- const panel=$('#chat-panel'),launch=$('#chat-launch'),messages=$('#chat-messages'),input=$('#chat-text');
- function toggle(open){panel.classList.toggle('open',open);launch.setAttribute('aria-expanded',String(open));if(open)setTimeout(()=>input.focus(),50)}
- // Chat panel is controlled by the standalone, defensive chat script below.
 
 })();
 </script>
 
-<script>
+<script type="text/javascript">
+var Tawk_API=Tawk_API||{}, Tawk_LoadStart=new Date();
 (function(){
- const panel=document.getElementById('chat-panel');
- const launch=document.getElementById('chat-launch');
- const close=document.getElementById('chat-close');
- const messages=document.getElementById('chat-messages');
- const form=document.getElementById('chat-form');
- const input=document.getElementById('chat-text');
- if(!panel||!launch||!close||!messages||!form||!input)return;
- const api=(window.LK_AGGREGATOR_API_URL||location.origin).replace(/\/$/,'');
- const handoff='https://wa.me/233559627349?text='+encodeURIComponent('Hello LK Newsroom team, I need help from an administrator.');
- function toggle(open){panel.classList.toggle('open',open);launch.setAttribute('aria-expanded',String(open));if(open)setTimeout(()=>input.focus(),50)}
- launch.addEventListener('click',function(){toggle(!panel.classList.contains('open'))});
- close.addEventListener('click',function(){toggle(false)});
- function bubble(text,who){const b=document.createElement('div');b.className='bubble '+who;b.textContent=text;messages.appendChild(b);messages.scrollTop=messages.scrollHeight}
- function link(text,url){const a=document.createElement('a');a.className='btn btn-primary';a.style.margin='0 0 8px 15px';a.href=url;a.target='_blank';a.rel='noopener';a.textContent=text;messages.appendChild(a);messages.scrollTop=messages.scrollHeight}
- async function send(raw){
-  const q=String(raw||'').trim();if(!q)return;
-  bubble(q,'user');
-  if(/admin|human|person|whatsapp|staff|speak to|talk to/.test(q.toLowerCase())){bubble('I can connect you with the LK Newsroom team on WhatsApp.','bot');link('Talk to an administrator on WhatsApp',handoff);return}
-  const pending=document.createElement('div');pending.className='bubble bot';pending.textContent='One moment…';messages.appendChild(pending);messages.scrollTop=messages.scrollHeight;
-  try{
-   const response=await fetch(api+'/v1/company/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
-   const data=await response.json();
-   pending.remove();
-   if(response.ok&&data.answer){bubble(data.answer,'bot');return}
-   if(data.error)bubble(data.error,'bot');else bubble('The AI assistant is temporarily unavailable. You can still contact our team on WhatsApp.','bot');
-   link('Talk to an administrator on WhatsApp',data.handoffUrl||handoff);
-  }catch(err){
-   pending.remove();
-   const s=q.toLowerCase();
-   if(/advert|campaign|banner|sponsor|quote|price|cost/.test(s))bubble('For advertising, submit a request on our Advertise page. We will review the request and confirm the quote before payment.','bot');
-   else if(/pay|bank|momo|mobile money|account|transfer|receipt/.test(s))bubble('Please confirm the payment recipient and amount with our team using an approved quote or invoice before sending money.','bot');
-   else bubble('I could not reach the AI service just now. Please try again or contact our team on WhatsApp.','bot');
-   link('Talk to an administrator on WhatsApp',handoff);
-  }
- }
- form.addEventListener('submit',function(e){e.preventDefault();const q=input.value;input.value='';send(q)});
- document.querySelectorAll('#chat-panel [data-question]').forEach(b=>b.addEventListener('click',()=>send(b.dataset.question)));
+var s1=document.createElement("script"),s0=document.getElementsByTagName("script")[0];
+s1.async=true;
+s1.src='https://embed.tawk.to/6ae3872d11474f347101d681/1k64cg2s8';
+s1.charset='UTF-8';
+s1.setAttribute('crossorigin','*');
+s0.parentNode.insertBefore(s1,s0);
 })();
 </script>
 
