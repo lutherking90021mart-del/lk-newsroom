@@ -1,0 +1,25 @@
+/* First-party LK Assistant Contact Hub */
+#lk-assistant-root{font-family:Inter,system-ui,sans-serif}
+.lk-assistant-launch{position:fixed;right:24px;bottom:22px;z-index:1200;border:0;border-radius:999px;background:linear-gradient(120deg,#13b9d2,#7785e8);color:#061426;font-weight:800;font-size:15px;box-shadow:0 12px 38px #0006;display:flex;align-items:center;gap:10px;padding:15px 22px;cursor:pointer}
+.lk-assistant-launch span{font-size:17px}
+.lk-assistant-panel{position:fixed;right:24px;bottom:92px;z-index:1201;width:min(464px,calc(100vw - 28px));height:min(675px,calc(100dvh - 116px));display:none;flex-direction:column;overflow:hidden;border:1px solid #ffffff35;border-radius:27px;background:#0b1c31;color:#e8eff8;box-shadow:0 25px 80px #0009}
+.lk-assistant-panel.open{display:flex;animation:lkAssistantPop .2s ease-out}
+.lk-assistant-head{min-height:106px;display:flex;align-items:flex-start;justify-content:space-between;padding:23px 25px;background:linear-gradient(110deg,#10475e,#242e64);border-bottom:1px solid #ffffff20}
+.lk-assistant-head strong{display:block;font-size:19px;font-weight:800}
+.lk-assistant-head small{display:block;margin-top:7px;color:#c9eaf4;font-size:13px}
+.lk-assistant-close{background:transparent;border:0;color:white;font-size:25px;line-height:1;cursor:pointer}
+.lk-assistant-messages{padding:18px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:11px}
+.lk-assistant-bubble{max-width:94%;padding:12px 15px;border-radius:15px;font-size:14px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.lk-assistant-bubble.bot{align-self:flex-start;background:#ffffff10;border:1px solid #ffffff20;color:#e8eff8;border-bottom-left-radius:5px}
+.lk-assistant-bubble.user{align-self:flex-end;background:#20c4df;color:#061426;border-bottom-right-radius:5px}
+.lk-assistant-quick{display:flex;flex-wrap:wrap;gap:8px;padding:0 17px 14px}
+.lk-assistant-quick button{background:transparent;border:1px solid #20c4df80;color:#9feefa;border-radius:999px;padding:9px 13px;font-size:12px;cursor:pointer}
+.lk-assistant-quick button:hover{background:#20c4df18}
+.lk-assistant-input{display:flex;gap:9px;padding:14px;border-top:1px solid #ffffff20}
+.lk-assistant-input input{min-width:0;flex:1;border:1px solid #ffffff55;background:#071426;color:white;border-radius:14px;padding:14px 15px;font-size:15px;outline:none}
+.lk-assistant-input input:focus{border-color:#20c4df}
+.lk-assistant-input button{width:52px;min-width:52px;border:0;background:#20c4df;color:#061426;border-radius:14px;font-size:25px;font-weight:700;cursor:pointer}
+.lk-assistant-handoff{align-self:flex-start;margin:0 0 8px 4px;color:#9feefa;text-decoration:underline;font-size:13px}
+@keyframes lkAssistantPop{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+@media(max-width:600px){.lk-assistant-launch{right:14px;bottom:14px;padding:13px 18px}.lk-assistant-panel{right:8px;bottom:78px;width:calc(100vw - 16px);height:min(690px,calc(100dvh - 92px));border-radius:22px}.lk-assistant-head{min-height:92px;padding:18px}.lk-assistant-messages{padding:14px}.lk-assistant-quick{padding:0 12px 11px;gap:6px}.lk-assistant-quick button{padding:8px 10px;font-size:11px}.lk-assistant-input{padding:10px}.lk-assistant-input input{padding:12px}}
+@media(prefers-reduced-motion:reduce){.lk-assistant-panel.open{animation:none}}
