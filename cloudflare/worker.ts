@@ -10,6 +10,8 @@ type Env = {
   R2_PUBLIC_BASE_URL?: string;
   GUARDIAN_API_KEY?: string;
   NEWS_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_CHAT_MODEL?: string;
   PAYSTACK_SECRET_KEY?: string;
   STRIPE_SECRET_KEY?: string;
 };
@@ -1355,6 +1357,52 @@ async function handleAdminMedia(request: Request, env: Env, origin: string) {
   return json({ error: "Method not allowed." }, 405, origin);
 }
 
+const companyChatWindows = new Map<string, { count: number; resetAt: number }>();
+async function companyAssistant(request: Request, env: Env, origin: string) {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const now = Date.now();
+  const window = companyChatWindows.get(ip);
+  if (!window || window.resetAt <= now) companyChatWindows.set(ip, { count: 1, resetAt: now + 60_000 });
+  else if (window.count >= 12) return json({ error: "Please wait a moment before asking another question." }, 429, origin);
+  else window.count += 1;
+
+  let body: any;
+  try { body = await request.json(); } catch { return json({ error: "Send your question as JSON." }, 400, origin); }
+  const question = String(body?.message || "").trim().slice(0, 1200);
+  if (!question) return json({ error: "Type a question first." }, 400, origin);
+
+  const handoffUrl = "https://wa.me/233559627349?text=" + encodeURIComponent("Hello LK Newsroom team, I need help from an administrator.");
+  const apiKey = env.GEMINI_API_KEY;
+  if (!apiKey) {
+    const q = question.toLowerCase();
+    let answer = "I can help with LK Newsroom enquiries. For a question that needs a staff member, use the WhatsApp handoff below or email lutherking90021mart@gmail.com.";
+    if (/advert|campaign|banner|sponsor|quote|price|cost/.test(q)) answer = "To advertise with LK Newsroom, submit an enquiry through the Advertise page. The team will review your request and confirm the placement and quote. Please wait for an approved quote or invoice before making any payment.";
+    else if (/pay|bank|momo|mobile money|account|transfer|receipt/.test(q)) answer = "For payment enquiries, please request or check an official quote or invoice with LK Newsroom first. Confirm the recipient and amount directly with the team before transferring funds. Never share your PIN, password or OTP.";
+    else if (/contact|email|phone|whatsapp|team|human|admin/.test(q)) answer = "You can reach the LK Newsroom team at lutherking90021mart@gmail.com or on WhatsApp at +233 55 962 7349.";
+    else if (/news|article|story|correction|tip/.test(q)) answer = "LK Newsroom covers Ghana, Africa and international news, including politics, business, technology, education, health, sports and entertainment. For a correction or news tip, send the article link and details to the team.";
+    return json({ answer, mode: "guided", handoffUrl }, 200, origin);
+  }
+
+  try {
+    const model = env.GEMINI_CHAT_MODEL || "gemini-2.5-flash";
+    const response = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent?key=" + encodeURIComponent(apiKey), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: "You are LK Assistant, the official visitor support assistant for LK Newsroom Global, a Ghana-based digital news and media platform under Lutherking Multimedia. Help with website navigation, news coverage, advertising enquiries, payment safety, partnerships and contacting the team. Be friendly, concise and accurate. Do not invent current headlines, advertising prices, campaign approvals, payment confirmations, staff availability or company policies. Advertising enquiries must be reviewed and quoted by the team before payment. Tell users to confirm recipient and amount directly with the team before transferring money; never request PINs, passwords, OTPs or full card details. Public contact: lutherking90021mart@gmail.com and WhatsApp +233 55 962 7349. For uncertain or sensitive enquiries, offer human handoff. Never claim you have submitted an enquiry or verified a payment." }] },
+        contents: [{ role: "user", parts: [{ text: question }] }],
+        generationConfig: { temperature: 0.3, maxOutputTokens: 350 }
+      })
+    });
+    const payload: any = await response.json();
+    const answer = String(payload?.candidates?.[0]?.content?.parts?.map((part: any) => part.text || "").join("") || "").trim();
+    if (!response.ok || !answer) throw new Error(payload?.error?.message || "AI response unavailable");
+    return json({ answer, mode: "ai", handoffUrl }, 200, origin);
+  } catch {
+    return json({ error: "The AI assistant is temporarily unavailable. Please try again or contact our team.", handoffUrl }, 503, origin);
+  }
+}
+
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -1367,6 +1415,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return Response.redirect(new URL("/admin/index.html", url.origin).toString(), 302);
   }
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "access-control-allow-origin": origin, "access-control-allow-methods": "GET,POST,OPTIONS", "access-control-allow-headers": "Content-Type,Authorization", "access-control-max-age": "86400" } });
+  if (path === "/v1/company/chat" && request.method === "POST") return companyAssistant(request, env, origin);
   if (path === "/v1/admin/bootstrap" && request.method === "POST") return handleAdminBootstrap(request, env, origin);
   if (path === "/v1/admin/login" && request.method === "POST") return handleAdminLogin(request, env, origin);
   if (path === "/v1/admin/logout" && request.method === "POST") return handleAdminLogout(request, env, origin);
