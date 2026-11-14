@@ -4,6 +4,27 @@
 
 **Brand promise: Ghana First. Africa Always.** LK Newsroom is an independent digital newsroom combining original reporting with carefully attributed discovery and curation. Aggregation is a tip and context pipeline, not permission to copy another publisher's article.
 
+## Editorial mix and desk priorities
+
+Use this starting allocation across the homepage and daily output, reviewed weekly against audience demand and public-interest value:
+
+- **60% Ghana:** national government and policy, regions, economy, education, health, business, culture, sport and community reporting.
+- **30% Africa:** country-level reporting across West, East, Central, North and Southern Africa; avoid allowing one country to dominate the desk.
+- **10% World:** international developments with a clear Ghanaian or African impact, plus major global events.
+
+These are editorial planning targets, not quotas that override breaking public-interest news. The homepage should lead with Ghana, then surface a distinct Africa desk and a smaller World desk. Keep Ghana and Africa navigation visible on desktop and mobile.
+
+## Automation policy
+
+The selected operating mode is **Balanced**. Automation may collect, normalize, deduplicate, classify and prepare candidate stories. Routine, low-risk items may be auto-published only when the source has an approved permission record and the item passes the worker's freshness, URL, headline and summary checks. Sensitive topics—including elections, allegations, crime, health, casualties and conflict—must remain in the editor review queue. Automation must not create breaking-news alerts or live updates on its own, and must not overwrite an editor's existing publication status during a feed refresh.
+
+This is a triage safeguard, not a fact-checking guarantee. Editors remain responsible for confirming claims, context, attribution and corrections. Auto-publishing must stay off for any source without documented rights approval.
+
+## Source readiness snapshot
+
+The branch's initial Ghana directory contains JoyNews/MyJoyOnline, YEN.com.gh, Graphic Online, Citi Newsroom, GhanaWeb, 3News, GBC Ghana and Ghana News Agency. All are seeded disabled and pending permission review. A MyJoyOnline RSS endpoint is recorded as an **unverified candidate only**; it is not permission to ingest or republish. Other sources have no configured feed endpoint until verified. Do not enable any source until its publisher identity, official endpoint, access method and permitted use are recorded and approved.
+
+
 ## Priority Ghana source directory
 
 | Source family | Website | Priority | Coverage | Relationship / note |
