@@ -345,6 +345,20 @@ async function fetchSourceEntries(source: any, env: Env): Promise<any[]> {
   throw new Error("Unsupported source type: " + String(source.source_type || "unknown"));
 }
 
+function balancedAutoPublishEligible(source: any, item: any, mode: string) {
+  if (mode !== "balanced" || String(source.permission_status || "").toLowerCase() !== "approved") return false;
+  const title = String(item.title || "").trim();
+  const summary = String(item.summary || "").trim();
+  if (title.length < 12 || summary.length < 40) return false;
+  const publishedAt = new Date(item.published);
+  if (!Number.isFinite(publishedAt.getTime()) || Date.now() - publishedAt.getTime() > 36 * 60 * 60 * 1000 || publishedAt.getTime() > Date.now() + 5 * 60 * 1000) return false;
+  // Conservative hold list: politics, allegations, crime, health, casualties,
+  // elections, conflict and other stories where context or right-of-reply matters.
+  const sensitive = /\b(election|electoral|vote|voting|president|minister|parliament|government|politic|court|judge|lawsuit|arrest|arrested|police|murder|killed|kill|death|died|dead|rape|sexual assault|abuse|accused|allegation|corruption|fraud|scam|terror|attack|explosion|bomb|shooting|war|military|coup|conflict|casualt|injur|missing person|child|minor|outbreak|epidemic|pandemic|disease|covid|vaccine|hospital|medical|health alert|resign|resignation|protest|riot|strike|crash|disaster|fire|flood|drought)\b/i;
+  if (sensitive.test(title + " " + summary)) return false;
+  return /^https?:\/\//i.test(String(item.url || ""));
+}
+
 async function upsertFeedArticles(env: Env, source: any, entries: any[], categoryId: string, categoryStatement: any) {
   if (!entries.length) {
     if (categoryStatement) await env.DB.batch([categoryStatement]);
@@ -367,6 +381,15 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
     if (String(row.source_id) !== String(source.id) && row.content_hash) crossSourceHashes.add(String(row.content_hash));
   }
 
+  const automationRow = await env.DB.prepare("SELECT value FROM settings WHERE key='editorial_automation' LIMIT 1").first() as any;
+  let automation: any = { mode: "balanced", social_auto_publish: true };
+  try {
+    const stored = automationRow?.value;
+    if (stored) automation = { ...automation, ...(typeof stored === "string" ? JSON.parse(stored) : stored) };
+  } catch {
+    // Invalid settings fail closed below by disabling automatic publishing.
+    automation = { mode: "off", social_auto_publish: false };
+  }
   const statements: any[] = [];
   if (categoryStatement) statements.push(categoryStatement);
   let inserted = 0, updated = 0, skipped = 0;
@@ -383,12 +406,13 @@ async function upsertFeedArticles(env: Env, source: any, entries: any[], categor
     const id = existingId || crypto.randomUUID();
     const slug = slugify(source.slug + "-" + item.title + "-" + (await sha(external)).slice(0, 8));
     const now = new Date().toISOString();
-    // Feed ingestion is discovery only: every new aggregated item enters the
-    // editorial draft queue. An editor must rewrite, verify and approve it.
-    // Store only the feed's short summary; never import the publisher's full body.
+    // Balanced automation publishes only recent, routine items from publishers
+    // whose reuse permission has been explicitly approved. All sensitive or
+    // incomplete items remain drafts for an editor. Never import full publisher copy.
+    const status = balancedAutoPublishEligible(source, item, String(automation.mode || "off")) ? "published" : "draft";
     statements.push(
-      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,'draft',0,0,?8,?9,?9,?10,?11,?12,?13,?8,?14,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
-        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 700), item.summary.slice(0, 700), item.image, item.url, item.published, now, categoryId, source.id, external, source.country, hash)
+      env.DB.prepare("INSERT INTO articles (id,slug,title,excerpt,content,featured_image_url,original_url,status,breaking,allow_comments,published_at,created_at,updated_at,category_id,source_id,external_id,country,source_updated_at,content_hash,auto_tags,is_aggregated) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,0,0,?9,?10,?10,?11,?12,?13,?14,?9,?15,'[]',1) ON CONFLICT(id) DO UPDATE SET title=excluded.title,excerpt=excluded.excerpt,content=excluded.content,featured_image_url=COALESCE(excluded.featured_image_url,articles.featured_image_url),original_url=excluded.original_url,source_updated_at=excluded.source_updated_at,content_hash=excluded.content_hash,updated_at=excluded.updated_at")
+        .bind(id, slug, item.title.slice(0, 800), item.summary.slice(0, 700), item.summary.slice(0, 700), item.image, item.url, status, item.published, now, categoryId, source.id, external, source.country, hash)
     );
     if (existingId) updated++; else inserted++;
   }
