@@ -14,7 +14,7 @@ ALTER TABLE news_sources ADD COLUMN last_verified_at TEXT;
 INSERT INTO news_sources
 (id,slug,name,source_type,feed_url,country,default_category,enabled,publisher_website,coverage_region,parent_network,editorial_priority,access_mode,permission_status,editorial_notes,created_at,updated_at)
 VALUES
-('joynews','joynews','JoyNews / MyJoyOnline','rss',NULL,'Ghana','Ghana',0,'https://www.myjoyonline.com/','West Africa','Multimedia Group Limited',1,'manual','pending','One source family. Do not count JoyNews and MyJoyOnline as independent corroboration. Confirm publisher-authorised feed access.',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
+('joynews','joynews','JoyNews / MyJoyOnline','rss','https://www.myjoyonline.com/feed/','Ghana','Ghana',0,'https://www.myjoyonline.com/','West Africa','Multimedia Group Limited',1,'manual','pending','One source family. Do not count JoyNews and MyJoyOnline as independent corroboration. Confirm publisher-authorised feed access.',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
 ('yen-com-gh','yen-com-gh','YEN.com.gh','rss',NULL,'Ghana','Ghana',0,'https://yen.com.gh/','West Africa','Legit (GMEM)',1,'manual','pending','High-priority Ghana digital publisher. Confirm official feed/API access and permitted use.',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
 ('graphic-online','graphic-online','Graphic Online','rss',NULL,'Ghana','Ghana',0,'https://www.graphic.com.gh/','West Africa','Graphic Communications Group Limited',1,'manual','pending','Confirm RSS/API terms and permitted reuse before enabling.',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
 ('citi-newsroom','citi-newsroom','Citi Newsroom','rss',NULL,'Ghana','Ghana',0,'https://citinewsroom.com/','West Africa','Omni Media Limited',1,'manual','pending','Confirm feed endpoint and permitted use.',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
@@ -30,7 +30,7 @@ ON CONFLICT(slug) DO UPDATE SET
   editorial_priority=excluded.editorial_priority,
   editorial_notes=excluded.editorial_notes,
   enabled=CASE WHEN news_sources.permission_status='approved' THEN news_sources.enabled ELSE 0 END,
-  feed_url=CASE WHEN news_sources.permission_status='approved' THEN news_sources.feed_url ELSE NULL END,
+  feed_url=CASE WHEN news_sources.permission_status='approved' THEN news_sources.feed_url ELSE excluded.feed_url END,
   updated_at=CURRENT_TIMESTAMP;
 
 -- Retire the duplicate MyJoyOnline record; use the combined JoyNews/MyJoyOnline family.
