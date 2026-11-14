@@ -25,7 +25,10 @@ on conflict (slug) do update set
   name=excluded.name, publisher_website=excluded.publisher_website,
   coverage_region=excluded.coverage_region, parent_network=excluded.parent_network,
   editorial_priority=excluded.editorial_priority, access_mode=excluded.access_mode,
-  permission_status=excluded.permission_status, editorial_notes=excluded.editorial_notes,
+  permission_status=case when public.news_sources.permission_status='approved' then public.news_sources.permission_status else excluded.permission_status end,
+  editorial_notes=excluded.editorial_notes,
+  enabled=case when public.news_sources.permission_status='approved' then public.news_sources.enabled else false end,
+  feed_url=case when public.news_sources.permission_status='approved' then public.news_sources.feed_url else null end,
   updated_at=now();
 
 -- Retire the duplicate MyJoyOnline source record; use the combined source family.
