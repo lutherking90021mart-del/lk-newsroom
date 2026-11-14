@@ -1475,6 +1475,13 @@ async function route(request: Request, env: Env): Promise<Response> {
     let slug = "";
     try { slug = decodeURIComponent(adminSourceMatch[1]); } catch { return json({ error: "Invalid source identifier." }, 400, origin); }
     try {
+      if (body.enabled) {
+        const source = await env.DB.prepare("SELECT permission_status,feed_url FROM news_sources WHERE slug=?1 LIMIT 1").bind(slug).first() as any;
+        if (!source) return json({ error: "News source not found." }, 404, origin);
+        if (String(source.permission_status || "pending").toLowerCase() !== "approved" || !String(source.feed_url || "").trim()) {
+          return json({ error: "This publisher cannot be enabled until feed access and reuse permission are verified and approved." }, 409, origin);
+        }
+      }
       const result = await env.DB.prepare("UPDATE news_sources SET enabled=?1,updated_at=?2 WHERE slug=?3")
         .bind(body.enabled ? 1 : 0, new Date().toISOString(), slug).run();
       if (Number(result?.meta?.changes || 0) !== 1) return json({ error: "News source not found." }, 404, origin);
