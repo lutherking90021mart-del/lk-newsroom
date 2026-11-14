@@ -26,7 +26,6 @@ const parser = new XMLParser({
 
 const DEFAULT_LIMIT = 24;
 const MAX_LIMIT = 100;
-const breakingTerms = /\b(breaking|just in|developing|urgent|emergency|alert|dies|dead|resigns?)\b/i;
 
 function json(data: unknown, status = 200, origin = "*") {
   return new Response(JSON.stringify(data), {
