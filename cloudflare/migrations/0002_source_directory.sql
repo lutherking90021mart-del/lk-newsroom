@@ -50,7 +50,7 @@ UPDATE news_sources SET enabled=0, feed_url=NULL, access_mode='manual', permissi
   publisher_website=CASE WHEN slug='africanews' THEN 'https://www.africanews.com/' ELSE 'https://www.news24.com/' END,
   coverage_region='Africa', editorial_priority=2,
   editorial_notes='Africa-wide expansion candidate. Verify publisher feed access, terms and permitted reuse before enabling.',
-  updated_at=CURRENT_TIMESTAMP WHERE slug IN ('africanews','news24');
+  updated_at=CURRENT_TIMESTAMP WHERE slug IN ('africanews','news24') AND COALESCE(permission_status,'pending') <> 'approved';
 
 CREATE INDEX IF NOT EXISTS idx_news_sources_priority
 ON news_sources(editorial_priority,country,enabled);
