@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 TABLE_COLUMNS = {
     "categories": ["id", "name", "slug", "description", "colour", "created_at"],
-    "news_sources": ["id", "slug", "name", "source_type", "feed_url", "api_endpoint", "api_secret_name", "country", "default_category", "enabled", "last_synced_at", "last_status", "last_error", "consecutive_failures", "created_at", "updated_at"],
+    "news_sources": ["id", "slug", "name", "source_type", "feed_url", "api_endpoint", "api_secret_name", "country", "default_category", "enabled", "last_synced_at", "last_status", "last_error", "consecutive_failures", "publisher_website", "coverage_region", "parent_network", "editorial_priority", "access_mode", "permission_status", "editorial_notes", "last_verified_at", "created_at", "updated_at"],
     "authors": ["id", "source_id", "name", "slug", "profile_url", "avatar_url", "created_at"],
     "tags": ["id", "name", "slug", "created_at"],
     "settings": ["key", "value", "is_public", "updated_at"],
