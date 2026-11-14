@@ -188,6 +188,11 @@ function home(){
   const remainingStories=feed.filter(article=>!used.has(String(article.id||article.slug||article.title)));
   const feedNotice=`<div class="empty-state newsroom-feed-state"><i class="fa-solid fa-newspaper fa-2x"></i><p>${newsLoading?'Loading the latest stories…':'The live news feed is temporarily unavailable. Please try again shortly.'}</p></div>`;
   const cards=(stories,compact=false)=>stories.length?stories.map((article,index)=>articleCard(article,compact&&index>0)).join(''):feedNotice;
+  const ghanaStories=feed.filter(article=>String(article.country||'').toLowerCase()==='ghana'||article.category.toLowerCase()==='ghana'||article.categorySlug==='ghana').slice(0,4);
+  const africanCountries=['ghana','nigeria','kenya','south africa','rwanda','senegal','uganda','tanzania','ethiopia','ivory coast','cote d’ivoire','cameroon','zambia','zimbabwe','botswana','namibia','mali','burkina faso','sierra leone','liberia','gambia','benin','togo','niger','chad','angola','mozambique','malawi','democratic republic of the congo','dr congo','congo','gabon','guinea','somalia','sudan','south sudan','morocco','algeria','tunisia','libya','egypt','mauritius'];
+  const africaStories=feed.filter(article=>article.category.toLowerCase()==='africa'||article.categorySlug==='africa'||(africanCountries.includes(String(article.country||'').toLowerCase())&&String(article.country||'').toLowerCase()!=='ghana')).slice(0,4);
+  const ghanaGrid=$('#ghana-news');if(ghanaGrid)ghanaGrid.innerHTML=cards(ghanaStories);
+  const africaGrid=$('#africa-news');if(africaGrid)africaGrid.innerHTML=cards(africaStories);
   $('#featured-articles').innerHTML=cards(featuredStories);
   $('#top-stories').innerHTML=cards(editorStories,true);
   $('#latest-news').innerHTML=cards(latestStories);
