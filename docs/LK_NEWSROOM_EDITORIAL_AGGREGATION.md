@@ -100,13 +100,15 @@ and tune the hold list based on actual newsroom experience. Publisher rows
 remain disabled/pending until access and reuse permission are verified.
 
 Social distribution uses the existing Social Media admin integration and its
-per-account **Enabled** and **Auto-post** switches. With the user's requested
-automatic mode, each connected, authorised account can auto-post newly
+per-account **Enabled** and **Auto-post** switches. When the Social Media admin
+screen is opened, it turns on **Auto-post** for accounts that are already
+connected and enabled; disabled accounts remain untouched. New account setup
+also defaults Auto-post to on. Each authorised account distributes newly
 published stories according to its configured category and delay rules.
 No account is created or authorised by this migration. Social posting remains
 inactive until an administrator completes the official OAuth or server-token
-connection and enables Auto-post for that account. Failed deliveries remain
-visible in the social queue for retry.
+connection and enables the account. Failed deliveries remain visible in the
+social queue for retry.
 
 ## Operational schedule
 
