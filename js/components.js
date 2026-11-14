@@ -12,7 +12,7 @@ export function articleCard(article, compact = false) {
 }
 
 export function renderHeader(active = '') {
-  const nav = [['Home',link('index.html')],['Latest',categoryUrl('Latest')],['Politics',categoryUrl('Politics')],['Business',categoryUrl('Business')],['Technology',categoryUrl('Technology')],['Sports',categoryUrl('Sports')],['Live Scores',link('pages/sports.html#live-scores')],['World',categoryUrl('World')],['Alerts',link('pages/notifications.html')]];
+  const nav = [['Home',link('index.html')],['Ghana',categoryUrl('Ghana')],['Africa',categoryUrl('Africa')],['Latest',categoryUrl('Latest')],['Politics',categoryUrl('Politics')],['Business',categoryUrl('Business')],['Sports',categoryUrl('Sports')],['Entertainment',categoryUrl('Entertainment')],['Technology',categoryUrl('Technology')],['World',categoryUrl('World')],['Live Scores',link('pages/sports.html#live-scores')],['Alerts',link('pages/notifications.html')]];
   const links = nav.map(([label,url]) => `<a class="${active === label.toLowerCase() ? 'active':''}" href="${url}">${label}</a>`).join('');
   const header = document.querySelector('[data-site-header]');
   if (!header) return;
