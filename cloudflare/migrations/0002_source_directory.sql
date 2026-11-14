@@ -40,5 +40,17 @@ SET enabled=0,
     updated_at=CURRENT_TIMESTAMP
 WHERE slug='myjoyonline';
 
+-- Retire the old TV3 slug so the normalized 3News source does not double-ingest.
+UPDATE news_sources SET enabled=0, feed_url=NULL,
+  editorial_notes='Retired legacy source slug; use the 3News source record after feed permission is confirmed.',
+  updated_at=CURRENT_TIMESTAMP WHERE slug='tv3-ghana';
+
+-- Africanews and News24 remain expansion candidates, not yet permission-verified.
+UPDATE news_sources SET enabled=0, feed_url=NULL, access_mode='manual', permission_status='pending',
+  publisher_website=CASE WHEN slug='africanews' THEN 'https://www.africanews.com/' ELSE 'https://www.news24.com/' END,
+  coverage_region='Africa', editorial_priority=2,
+  editorial_notes='Africa-wide expansion candidate. Verify publisher feed access, terms and permitted reuse before enabling.',
+  updated_at=CURRENT_TIMESTAMP WHERE slug IN ('africanews','news24');
+
 CREATE INDEX IF NOT EXISTS idx_news_sources_priority
 ON news_sources(editorial_priority,country,enabled);
