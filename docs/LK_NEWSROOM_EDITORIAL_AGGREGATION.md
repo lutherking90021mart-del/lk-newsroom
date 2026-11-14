@@ -80,6 +80,34 @@ Africa coverage should rotate country focus and avoid treating only Nigeria, Ken
 
 Source priority is a monitoring preference, not a truth score. Rank stories separately using public interest and impact; Ghana/Africa relevance; recency; independent corroboration and primary evidence; local/regional coverage gaps; editorial sensitivity and harm risk. Popularity, virality, advertiser interest and automated trending scores must never override verification.
 
+## Balanced automation defaults
+
+The Cloudflare Worker uses the `editorial_automation` setting seeded by
+`cloudflare/migrations/0003_balanced_automation.sql`. In **balanced** mode,
+new feed items are automatically published only when all of these conditions
+are met: the publisher's `permission_status` is explicitly `approved`; the
+item has a usable headline, a substantive short excerpt and a canonical HTTP(S)
+source link; its publication timestamp is no more than 36 hours old; and the
+headline/excerpt do not match the conservative sensitive-topic hold list.
+Everything else stays in the draft queue. Existing article status is preserved
+when a feed refresh updates an item. Feed imports never create breaking-news or
+live-update alerts automatically, and never copy full publisher article bodies.
+
+This is a cautious first-stage filter, not a substitute for reporting or
+independent verification. The automation does not claim to verify facts from
+the source excerpt. Editors should periodically review auto-published items
+and tune the hold list based on actual newsroom experience. Publisher rows
+remain disabled/pending until access and reuse permission are verified.
+
+Social distribution uses the existing Social Media admin integration and its
+per-account **Enabled** and **Auto-post** switches. With the user's requested
+automatic mode, each connected, authorised account can auto-post newly
+published stories according to its configured category and delay rules.
+No account is created or authorised by this migration. Social posting remains
+inactive until an administrator completes the official OAuth or server-token
+connection and enables Auto-post for that account. Failed deliveries remain
+visible in the social queue for retry.
+
 ## Operational schedule
 
 - Poll approved feeds every 5–10 minutes, with per-source backoff; never exceed publisher rate limits or terms.
