@@ -10,7 +10,7 @@ alter table public.news_sources add column if not exists permission_status text 
 alter table public.news_sources add column if not exists editorial_notes text;
 alter table public.news_sources add column if not exists last_verified_at timestamptz;
 
-insert into public.news_sources
+insert into public.news_sources as current_source
   (slug,name,source_type,feed_url,country,default_category,enabled,publisher_website,coverage_region,parent_network,editorial_priority,access_mode,permission_status,editorial_notes)
 values
   ('joynews','JoyNews / MyJoyOnline','rss',null,'Ghana','Ghana',false,'https://www.myjoyonline.com/','West Africa','Multimedia Group Limited',1,'manual','pending','One source family: do not count JoyNews and MyJoyOnline as independent corroboration. Confirm publisher-authorised feed access.'),
@@ -25,10 +25,10 @@ on conflict (slug) do update set
   name=excluded.name, publisher_website=excluded.publisher_website,
   coverage_region=excluded.coverage_region, parent_network=excluded.parent_network,
   editorial_priority=excluded.editorial_priority, access_mode=excluded.access_mode,
-  permission_status=case when public.news_sources.permission_status='approved' then public.news_sources.permission_status else excluded.permission_status end,
+  permission_status=case when current_source.permission_status='approved' then public.news_sources.permission_status else excluded.permission_status end,
   editorial_notes=excluded.editorial_notes,
-  enabled=case when public.news_sources.permission_status='approved' then public.news_sources.enabled else false end,
-  feed_url=case when public.news_sources.permission_status='approved' then public.news_sources.feed_url else null end,
+  enabled=case when public.news_sources.permission_status='approved' then current_source.enabled else false end,
+  feed_url=case when public.news_sources.permission_status='approved' then current_source.feed_url else null end,
   updated_at=now();
 
 -- Retire the duplicate MyJoyOnline source record; use the combined source family.
