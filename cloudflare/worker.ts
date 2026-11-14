@@ -1457,7 +1457,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (!session) return json({ error: "Your admin session has expired. Sign in again." }, 401, origin);
     if (!adminRoleCanRead(session.role, "news_sources")) return json({ error: "Your role cannot view news sources." }, 403, origin);
     try {
-      const rows = await env.DB.prepare("SELECT id,slug,name,source_type,feed_url,api_endpoint,api_secret_name,country,default_category,enabled,last_synced_at,last_status,last_error,consecutive_failures FROM news_sources ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END,last_synced_at ASC,name ASC").all();
+      const rows = await env.DB.prepare("SELECT id,slug,name,source_type,feed_url,api_endpoint,api_secret_name,country,default_category,enabled,last_synced_at,last_status,last_error,consecutive_failures,publisher_website,coverage_region,parent_network,editorial_priority,access_mode,permission_status,editorial_notes,last_verified_at FROM news_sources ORDER BY CASE WHEN last_synced_at IS NULL THEN 0 ELSE 1 END,last_synced_at ASC,name ASC").all();
       return json({ data: (rows.results || []).map((row: any) => ({ ...row, enabled: Number(row.enabled) === 1 })) }, 200, origin);
     } catch (error) {
       console.error("Unable to load news sources:", error);
