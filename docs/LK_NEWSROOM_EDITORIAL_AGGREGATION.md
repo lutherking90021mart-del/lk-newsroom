@@ -95,6 +95,12 @@ Source priority is a monitoring preference, not a truth score. Rank stories sepa
 
 **Editorial Queue:** incoming leads, duplicate clusters and related sources; verification checklist and primary-source links; LK author/editor, story type and geographic desk; approve, hold, reject, rewrite as brief or assign original reporting; correction history and attribution preview.
 
+## Cloudflare D1 implementation
+
+For the Cloudflare D1 deployment, apply `cloudflare/migrations/0002_source_directory.sql` to the existing `lk-newsroom-db` after the current `cloudflare/schema.sql` has been installed. This adds publisher metadata, seeds the eight Ghana priority publishers as disabled/pending, retires the duplicate legacy TV3 slug, and pauses Africa feed candidates until access is reviewed. The Cloudflare Worker ingests directly from enabled `news_sources` rows, so configure an approved feed URL in the D1 source record and enable it only after the permission status is approved. Do not run the Supabase SQL migration against D1. `supabase/source-directory-upgrade.sql` is only for deployments still using the legacy Supabase schema.
+
+The D1 migration is an additive migration and should be applied once. Back up/export the D1 database first and inspect source records after applying. Do not execute it against a database that already has these added columns.
+
 ## Implementation notes
 
 The application already has news_sources, feed_logs, worker_runs, article source IDs, canonical source URLs, a server-side RSS/API worker and duplicate-checking hooks. The accompanying upgrade adds source-directory metadata and seeds the eight Ghana priority publishers as disabled/pending. Provider endpoints are read from server-side environment variables. No RSS URLs are invented and no automatic publisher ingestion is enabled before access and reuse rights are confirmed.
